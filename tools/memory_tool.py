@@ -217,6 +217,28 @@ class MemoryStore:
         return len(ENTRY_DELIMITER.join(entries))
 
     def _char_limit(self, target: str) -> int:
+        """Read char limit from live config.yaml so changes take effect immediately.
+
+        Falls back to instance defaults only if config cannot be read.
+        This ensures that changes to memory_char_limit / user_char_limit in
+        config.yaml are honoured across all platforms (TG, CLI, gateway)
+        without requiring a session restart.
+        """
+        try:
+            _cfg_path = Path(get_hermes_home()) / "config.yaml"
+            if _cfg_path.exists():
+                import yaml
+                with open(_cfg_path, "r", encoding="utf-8") as _f:
+                    _cfg = yaml.safe_load(_f) or {}
+                _mem_cfg = _cfg.get("memory", {})
+                if target == "user":
+                    _val = _mem_cfg.get("user_char_limit", self.user_char_limit)
+                else:
+                    _val = _mem_cfg.get("memory_char_limit", self.memory_char_limit)
+                return int(_val)
+        except Exception:
+            pass
+        # Fallback to init-time defaults
         if target == "user":
             return self.user_char_limit
         return self.memory_char_limit
