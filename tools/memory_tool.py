@@ -58,6 +58,14 @@ def get_memory_dir() -> Path:
 
 ENTRY_DELIMITER = "\n§\n"
 
+# ── Weighted memory ──────────────────────────────────────────────────────
+# Entries can carry a priority weight: [P0] (default) through [P3] (iron rule).
+# Higher priority = more prominent in system prompt (sorted first, visual markers).
+# When the user corrects the same point repeatedly, priority auto-increments.
+PRIORITY_RE = re.compile(r"^\[P([0-9])\]\s*")
+DEFAULT_PRIORITY = 0
+MAX_PRIORITY = 3
+
 
 # ---------------------------------------------------------------------------
 # Memory content scanning — lightweight check for injection/exfiltration
@@ -122,6 +130,41 @@ class MemoryStore:
         self.user_char_limit = user_char_limit
         # Frozen snapshot for system prompt -- set once at load_from_disk()
         self._system_prompt_snapshot: Dict[str, str] = {"memory": "", "user": ""}
+
+    # ── Weighted memory helpers ──────────────────────────────────────────
+
+    @staticmethod
+    def _parse_priority(entry: str) -> int:
+        """Extract priority from [P0]..[P3] prefix. Default 0 if absent."""
+        m = PRIORITY_RE.match(entry)
+        return int(m.group(1)) if m else DEFAULT_PRIORITY
+
+    @staticmethod
+    def _strip_priority(entry: str) -> str:
+        """Remove [Pn] prefix from an entry."""
+        return PRIORITY_RE.sub("", entry).strip()
+
+    @staticmethod
+    def _set_priority(entry: str, priority: int) -> str:
+        """Set or update priority prefix on an entry."""
+        priority = max(0, min(priority, MAX_PRIORITY))
+        stripped = PRIORITY_RE.sub("", entry).strip()
+        if priority == DEFAULT_PRIORITY:
+            return stripped  # No prefix needed for default
+        return f"[P{priority}] {stripped}"
+
+    def _autoboost_priority(self, target: str, old_entry: str, new_content: str) -> str:
+        """When replacing an entry, detect if this is a repeated correction
+        (same topic updated again) and auto-increment priority.
+
+        Heuristic: if the old entry already has a priority tag, and the new
+        content is a correction of the same point, bump priority by 1.
+        """
+        old_pri = self._parse_priority(old_entry)
+        # Auto-boost: if replacing a non-default-priority entry, promote it
+        # Default entries get promoted to P1 on first correction (replace).
+        new_pri = min(old_pri + 1, MAX_PRIORITY) if old_pri >= 1 else max(old_pri + 1, 1)
+        return self._set_priority(new_content, new_pri)
 
     def load_from_disk(self):
         """Load entries from MEMORY.md and USER.md, capture system prompt snapshot."""
@@ -324,7 +367,12 @@ class MemoryStore:
                 # All identical -- safe to replace just the first
 
             idx = matches[0][0]
+            old_entry = entries[idx]
             limit = self._char_limit(target)
+
+            # Auto-boost priority: if this looks like a repeated correction,
+            # increment the priority weight to make it more prominent.
+            new_content = self._autoboost_priority(target, old_entry, new_content)
 
             # Check that replacement doesn't blow the budget
             test_entries = entries.copy()
@@ -413,12 +461,37 @@ class MemoryStore:
         return resp
 
     def _render_block(self, target: str, entries: List[str]) -> str:
-        """Render a system prompt block with header and usage indicator."""
+        """Render a system prompt block with header, usage indicator, and priority排序.
+
+        Higher-priority entries ([P3] > [P2] > [P1] > [P0]/default) are sorted
+        to the top so the model sees the most important corrections first.
+        Visual markers reinforce priority in the rendered output.
+        """
         if not entries:
             return ""
 
+        # Sort by priority (descending): P3 first, then P2, P1, P0/default
+        def _sort_key(e: str) -> int:
+            return -self._parse_priority(e)
+
+        sorted_entries = sorted(entries, key=_sort_key)
+
+        # Add visual markers for priority > 0
+        rendered_entries = []
+        for e in sorted_entries:
+            pri = self._parse_priority(e)
+            stripped = self._strip_priority(e)
+            if pri >= 3:
+                rendered_entries.append(f"⚠⚠ {stripped}")
+            elif pri == 2:
+                rendered_entries.append(f"⚠ {stripped}")
+            elif pri == 1:
+                rendered_entries.append(f"▷ {stripped}")
+            else:
+                rendered_entries.append(stripped)
+
         limit = self._char_limit(target)
-        content = ENTRY_DELIMITER.join(entries)
+        content = ENTRY_DELIMITER.join(rendered_entries)
         current = len(content)
         pct = min(100, int((current / limit) * 100)) if limit > 0 else 0
 
@@ -555,8 +628,13 @@ MEMORY_SCHEMA = {
         "TWO TARGETS:\n"
         "- 'user': who the user is -- name, role, preferences, communication style, pet peeves\n"
         "- 'memory': your notes -- environment facts, project conventions, tool quirks, lessons learned\n\n"
-        "ACTIONS: add (new entry), replace (update existing -- old_text identifies it), "
+"ACTIONS: add (new entry), replace (update existing -- old_text identifies it), "
         "remove (delete -- old_text identifies it).\n\n"
+        "WEIGHTED MEMORY: Entries can carry a priority weight [P0]..[P3]. "
+        "When you replace an entry (repeated correction), priority auto-increments — "
+        "making it more prominent in future system prompts. P3 entries (⚠⚠) are iron rules "
+        "that MUST NOT be violated. Use [Pn] prefix only for user-corrected facts that "
+        "keep being ignored.\n\n"
         "SKIP: trivial/obvious info, things easily re-discovered, raw data dumps, and temporary task state."
     ),
     "parameters": {

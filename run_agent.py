@@ -9291,6 +9291,17 @@ class AIAgent:
                     )
                 except Exception:
                     pass
+            # Hot refresh: invalidate cached system prompt after memory writes
+            # so that mid-session memory changes appear in the system prompt
+            # on the next turn. The cost is losing prefix cache for one turn,
+            # but memory writes are infrequent and the benefit (accurate memory
+            # injection) far outweighs the cost.
+            _action = function_args.get("action", "")
+            if _action in ("add", "replace", "remove") and self._memory_store:
+                try:
+                    self._invalidate_system_prompt()
+                except Exception:
+                    pass
             return result
         elif self._memory_manager and self._memory_manager.has_tool(function_name):
             return self._memory_manager.handle_tool_call(function_name, function_args)
@@ -9893,6 +9904,13 @@ class AIAgent:
                                 tool_call_id=getattr(tool_call, "id", None),
                             ),
                         )
+                    except Exception:
+                        pass
+                # Hot refresh: invalidate cached system prompt after memory writes
+                _action = function_args.get("action", "")
+                if _action in ("add", "replace", "remove") and self._memory_store:
+                    try:
+                        self._invalidate_system_prompt()
                     except Exception:
                         pass
                 tool_duration = time.time() - tool_start_time
