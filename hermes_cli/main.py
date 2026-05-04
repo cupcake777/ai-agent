@@ -114,6 +114,16 @@ def _apply_profile_override() -> None:
             consume = 1
             break
 
+    # 1b. Reject values that can't be valid profile names (e.g. pytest's
+    # "-p no:xdist" would be misread as profile "no:xdist" otherwise).
+    # Mirrors hermes_cli.profiles._PROFILE_ID_RE so we never call
+    # resolve_profile_env() with a value it must reject + sys.exit on.
+    if profile_name is not None and consume == 2:
+        import re as _re
+        if not _re.match(r"^[a-z0-9][a-z0-9_-]{0,63}$", profile_name):
+            profile_name = None
+            consume = 0
+
     # 1.5 If HERMES_HOME is already set and no explicit flag was given, trust it.
     # This lets child processes (relaunch, subprocess) inherit the parent's
     # profile choice without having to pass --profile again.
@@ -837,7 +847,17 @@ def _print_tui_exit_summary(session_id: Optional[str], active_session_file: Opti
     )
 
 
-_NPM_LOCK_RUNTIME_KEYS = frozenset({"ideallyInert"})
+_NPM_LOCK_RUNTIME_KEYS = frozenset({"ideallyInert", "peer"})
+"""Lockfile fields npm writes non-deterministically at install time.
+
+``ideallyInert`` is npm's runtime annotation for packages it skipped installing
+(per-platform opt-outs).  ``peer`` is dropped from the hidden ``.package-lock.json``
+on dev-dependencies that are *also* declared as peers — the canonical
+``package-lock.json`` records the dual role, but npm 9's actualized tree strips
+it.  Neither key represents a real skew between what was declared and what was
+installed, so we exclude them from the comparison in :func:`_tui_need_npm_install`
+to avoid false-positive reinstalls on every launch.
+"""
 
 
 def _tui_need_npm_install(root: Path) -> bool:
@@ -1042,17 +1062,21 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
     if _tui_need_npm_install(tui_dir):
         if not os.environ.get("HERMES_QUIET"):
             print("Installing TUI dependencies…")
+        # Capture stdout as well as stderr — some npm errors (notably EACCES on a
+        # root-owned node_modules in containers) are emitted on stdout, and a
+        # bare "npm install failed." with no preview defeats debugging.  We keep
+        # the failure-only print path so a successful install stays silent.
         result = subprocess.run(
             [npm, "install", "--silent", "--no-fund", "--no-audit", "--progress=false"],
             cwd=str(tui_dir),
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             env={**os.environ, "CI": "1"},
         )
         if result.returncode != 0:
-            err = (result.stderr or "").strip()
-            preview = "\n".join(err.splitlines()[-30:])
+            combined = f"{result.stdout or ''}\n{result.stderr or ''}".strip()
+            preview = "\n".join(combined.splitlines()[-30:])
             print("npm install failed.")
             if preview:
                 print(preview)
@@ -3399,10 +3423,10 @@ def _model_flow_named_custom(config, provider_info):
     print()
 
     print("Fetching available models...")
-    models = fetch_api_models(
-        api_key, base_url, timeout=8.0,
-        api_mode=api_mode or None,
-    )
+    fetch_kwargs = {"timeout": 8.0}
+    if api_mode:
+        fetch_kwargs["api_mode"] = api_mode
+    models = fetch_api_models(api_key, base_url, **fetch_kwargs)
 
     if models:
         default_idx = 0
@@ -8891,6 +8915,7 @@ Examples:
     hermes debug share --lines 500  Include more log lines
     hermes debug share --expire 30  Keep paste for 30 days
     hermes debug share --local      Print report locally (no upload)
+    hermes debug share --no-redact  Disable upload-time secret redaction
     hermes debug delete <url>       Delete a previously uploaded paste
 """,
     )
@@ -8915,6 +8940,16 @@ Examples:
         "--local",
         action="store_true",
         help="Print the report locally instead of uploading",
+    )
+    share_parser.add_argument(
+        "--no-redact",
+        action="store_true",
+        help=(
+            "Disable upload-time secret redaction (default: redact). Logs "
+            "are normally run through agent.redact.redact_sensitive_text "
+            "with force=True before upload so credentials are not leaked "
+            "into the public paste service."
+        ),
     )
     delete_parser = debug_sub.add_parser(
         "delete",
