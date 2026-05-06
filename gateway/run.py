@@ -4126,7 +4126,10 @@ class GatewayRunner:
         elif platform == Platform.EMAIL:
             from gateway.platforms.email import EmailAdapter, check_email_requirements
             if not check_email_requirements():
-                logger.warning("Email: EMAIL_ADDRESS, EMAIL_PASSWORD, EMAIL_IMAP_HOST, or EMAIL_SMTP_HOST not set")
+                logger.warning(
+                    "Email: EMAIL_ADDRESS, EMAIL_PASSWORD, EMAIL_IMAP_HOST, and one of "
+                    "EMAIL_SMTP_HOST or RESEND_API_KEY must be set"
+                )
                 return None
             return EmailAdapter(config)
 

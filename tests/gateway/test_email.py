@@ -64,6 +64,33 @@ class TestConfigEnvOverrides(unittest.TestCase):
         _apply_env_overrides(config)
         self.assertNotIn(Platform.EMAIL, config.platforms)
 
+    @patch.dict(os.environ, {
+        "EMAIL_ADDRESS": "hermes@test.com",
+        "EMAIL_PASSWORD": "secret",
+        "EMAIL_IMAP_HOST": "imap.test.com",
+        "RESEND_API_KEY": "re_test",
+    }, clear=False)
+    def test_email_config_loaded_from_env_with_resend(self):
+        from gateway.config import GatewayConfig, Platform, _apply_env_overrides
+        config = GatewayConfig()
+        _apply_env_overrides(config)
+        self.assertIn(Platform.EMAIL, config.platforms)
+        self.assertTrue(config.platforms[Platform.EMAIL].enabled)
+
+    @patch.dict(os.environ, {
+        "EMAIL_ADDRESS": "hermes@test.com",
+        "EMAIL_PASSWORD": "secret",
+        "EMAIL_IMAP_HOST": "imap.test.com",
+        "EMAIL_SMTP_HOST": "smtp.test.com",
+    }, clear=False)
+    def test_email_in_connected_platforms(self):
+        from gateway.config import GatewayConfig, Platform, _apply_env_overrides
+        config = GatewayConfig()
+        _apply_env_overrides(config)
+        connected = config.get_connected_platforms()
+        self.assertIn(Platform.EMAIL, connected)
+
+
 class TestCheckRequirements(unittest.TestCase):
     """Verify check_email_requirements function."""
 
@@ -74,6 +101,16 @@ class TestCheckRequirements(unittest.TestCase):
         "EMAIL_SMTP_HOST": "smtp.b.com",
     }, clear=False)
     def test_requirements_met(self):
+        from gateway.platforms.email import check_email_requirements
+        self.assertTrue(check_email_requirements())
+
+    @patch.dict(os.environ, {
+        "EMAIL_ADDRESS": "a@b.com",
+        "EMAIL_PASSWORD": "pw",
+        "EMAIL_IMAP_HOST": "imap.b.com",
+        "RESEND_API_KEY": "re_test",
+    }, clear=False)
+    def test_requirements_met_with_resend(self):
         from gateway.platforms.email import check_email_requirements
         self.assertTrue(check_email_requirements())
 
@@ -572,6 +609,28 @@ class TestSendMethods(unittest.TestCase):
             self.assertFalse(result.success)
             self.assertIn("Connection refused", result.error)
 
+    def test_send_uses_resend_when_configured(self):
+        """send() should use Resend API instead of SMTP when configured."""
+        import asyncio
+        from gateway.config import PlatformConfig
+
+        with patch.dict(os.environ, {
+            "EMAIL_ADDRESS": "hermes@test.com",
+            "EMAIL_PASSWORD": "secret",
+            "EMAIL_IMAP_HOST": "imap.test.com",
+            "RESEND_API_KEY": "re_test",
+        }, clear=False):
+            from gateway.platforms.email import EmailAdapter
+            adapter = EmailAdapter(PlatformConfig(enabled=True))
+
+        with patch.object(adapter, "_send_via_resend") as resend_mock, \
+             patch("smtplib.SMTP") as smtp_mock:
+            result = asyncio.run(adapter.send("user@test.com", "Hello from Hermes!"))
+
+        self.assertTrue(result.success)
+        resend_mock.assert_called_once()
+        smtp_mock.assert_not_called()
+
     def test_send_image_includes_url(self):
         """send_image should include image URL in email body."""
         import asyncio
@@ -704,6 +763,33 @@ class TestConnectDisconnect(unittest.TestCase):
              patch("smtplib.SMTP", side_effect=Exception("SMTP down")):
             result = asyncio.run(adapter.connect())
             self.assertFalse(result)
+
+    def test_connect_skips_smtp_when_resend_configured(self):
+        """Resend outbound mode should not require an SMTP socket test."""
+        import asyncio
+        from gateway.config import PlatformConfig
+
+        with patch.dict(os.environ, {
+            "EMAIL_ADDRESS": "hermes@test.com",
+            "EMAIL_PASSWORD": "secret",
+            "EMAIL_IMAP_HOST": "imap.test.com",
+            "RESEND_API_KEY": "re_test",
+        }, clear=False):
+            from gateway.platforms.email import EmailAdapter
+            adapter = EmailAdapter(PlatformConfig(enabled=True))
+
+        mock_imap = MagicMock()
+        mock_imap.uid.return_value = ("OK", [b""])
+
+        with patch("imaplib.IMAP4_SSL", return_value=mock_imap), \
+             patch("smtplib.SMTP") as mock_smtp:
+            result = asyncio.run(adapter.connect())
+
+        self.assertTrue(result)
+        mock_smtp.assert_not_called()
+        adapter._running = False
+        if adapter._poll_task:
+            adapter._poll_task.cancel()
 
     def test_disconnect_cancels_poll(self):
         """disconnect() should cancel the polling task."""

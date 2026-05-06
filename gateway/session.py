@@ -620,6 +620,20 @@ def build_session_key(
       - Without identifiers, messages fall back to one session per platform/chat_type.
     """
     platform = source.platform.value
+
+    # Unified DM session: merge weixin and telegram DMs into one session
+    # so conversation context is shared across platforms for the same owner.
+    # Controlled by UNIFIED_DM_SESSION env var (set to "true" to enable).
+    # When enabled, all DMs from unified platforms map to a single session key,
+    # regardless of chat_id (suitable for single-owner setups).
+    _unified_platforms = frozenset({"telegram", "weixin", "local"})
+    if (
+        os.environ.get("UNIFIED_DM_SESSION", "").lower() == "true"
+        and source.chat_type == "dm"
+        and platform in _unified_platforms
+    ):
+        return "agent:main:unified:dm"
+
     if source.chat_type == "dm":
         dm_chat_id = source.chat_id
         if source.platform == Platform.WHATSAPP:

@@ -1137,17 +1137,30 @@ def run_doctor(args):
                 if base_url_host_matches(_base, "api.kimi.com") and _base.rstrip("/").endswith("/coding"):
                     _base = _base.rstrip("/") + "/v1"
                 _url = (_base.rstrip("/") + "/models") if _base else _default_url
-                _headers = {
-                    "Authorization": f"Bearer {_key}",
-                    "User-Agent": _HERMES_USER_AGENT,
-                }
-                if base_url_host_matches(_base, "api.kimi.com"):
-                    _headers["User-Agent"] = "claude-code/0.1.0"
-                _resp = httpx.get(
-                    _url,
-                    headers=_headers,
-                    timeout=10,
-                )
+                _headers = {"Authorization": f"Bearer {_key}"}
+                if "api.kimi.com" in _url.lower():
+                    _headers["User-Agent"] = "KimiCLI/1.30.0"
+                if _pname == "OpenCode Go":
+                    # OpenCode Go currently serves chat completions reliably,
+                    # while the advertised /models URL may return the website 404.
+                    _probe_url = (_base.rstrip("/") + "/chat/completions") if _base else "https://opencode.ai/zen/go/v1/chat/completions"
+                    _resp = httpx.post(
+                        _probe_url,
+                        headers={**_headers, "Content-Type": "application/json", "User-Agent": "HermesDoctor/1.0"},
+                        json={
+                            "model": "glm-5",
+                            "messages": [{"role": "user", "content": "Reply with ok"}],
+                            "max_tokens": 8,
+                            "stream": False,
+                        },
+                        timeout=10,
+                    )
+                else:
+                    _resp = httpx.get(
+                        _url,
+                        headers=_headers,
+                        timeout=10,
+                    )
                 if _resp.status_code == 200:
                     print(f"\r  {color('✓', Colors.GREEN)} {_label}                          ")
                 elif _resp.status_code == 401:
