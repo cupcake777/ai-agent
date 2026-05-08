@@ -91,6 +91,15 @@ def _termux_browser_setup_steps(node_installed: bool) -> list[str]:
     return steps
 
 
+def _termux_install_all_fallback_notes() -> list[str]:
+    return [
+        "Termux install profile: use .[termux-all] for broad compatibility (installer default on Termux).",
+        "Matrix E2EE extra is excluded on Termux (python-olm currently fails to build).",
+        "Local faster-whisper extra is excluded on Termux (ctranslate2/av build path unavailable).",
+        "STT fallback: use Groq Whisper (set GROQ_API_KEY) or OpenAI Whisper (set VOICE_TOOLS_OPENAI_KEY).",
+    ]
+
+
 def _has_provider_env_config(content: str) -> bool:
     """Return True when ~/.hermes/.env contains provider auth/base URL settings."""
     return any(key in content for key in _PROVIDER_ENV_HINTS)
@@ -1084,6 +1093,11 @@ def run_doctor(args):
             except Exception:
                 pass
 
+    if _is_termux():
+        check_info("Termux compatibility fallbacks:")
+        for note in _termux_install_all_fallback_notes():
+            check_info(note)
+
     # =========================================================================
     # Check: API connectivity
     # =========================================================================
@@ -1214,27 +1228,24 @@ def run_doctor(args):
                 if base_url_host_matches(_base, "api.kimi.com") and _base.rstrip("/").endswith("/coding"):
                     _base = _base.rstrip("/") + "/v1"
                 _url = (_base.rstrip("/") + "/models") if _base else _default_url
-                _headers = {"Authorization": f"Bearer {_key}"}
-                if "api.kimi.com" in _url.lower():
-                    _headers["User-Agent"] = "KimiCLI/1.30.0"
-                if _pname == "OpenCode Go":
-                    # OpenCode Go currently serves chat completions reliably,
-                    # while the advertised /models URL may return the website 404.
-                    _probe_url = (_base.rstrip("/") + "/chat/completions") if _base else "https://opencode.ai/zen/go/v1/chat/completions"
-                    _resp = httpx.post(
-                        _probe_url,
-                        headers={**_headers, "Content-Type": "application/json", "User-Agent": "HermesDoctor/1.0"},
-                        json={
-                            "model": "glm-5",
-                            "messages": [{"role": "user", "content": "Reply with ok"}],
-                            "max_tokens": 8,
-                            "stream": False,
-                        },
-                        timeout=10,
-                    )
-                else:
+                _headers = {
+                    "Authorization": f"Bearer {_key}",
+                    "User-Agent": _HERMES_USER_AGENT,
+                }
+                if base_url_host_matches(_base, "api.kimi.com"):
+                    _headers["User-Agent"] = "claude-code/0.1.0"
+                _resp = httpx.get(
+                    _url,
+                    headers=_headers,
+                    timeout=10,
+                )
+                if (
+                    _pname == "Alibaba/DashScope"
+                    and not _base
+                    and _resp.status_code == 401
+                ):
                     _resp = httpx.get(
-                        _url,
+                        "https://dashscope.aliyuncs.com/compatible-mode/v1/models",
                         headers=_headers,
                         timeout=10,
                     )
