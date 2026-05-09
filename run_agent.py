@@ -174,6 +174,10 @@ from agent.display import (
     _detect_tool_failure,
     get_tool_emoji as _get_tool_emoji,
 )
+from agent.stream_repetition_guard import (
+    StreamRepetitionGuardConfig,
+    StreamingRepetitionGuard,
+)
 from agent.tool_guardrails import (
     ToolCallGuardrailConfig,
     ToolCallGuardrailController,
@@ -1315,6 +1319,7 @@ class AIAgent:
         # even when stream consumers are registered (no tokens streaming then)
         self._executing_tools = False
         self._tool_guardrails = ToolCallGuardrailController()
+        self._stream_repetition_guard = StreamingRepetitionGuard()
         self._tool_guardrail_halt_decision: ToolGuardrailDecision | None = None
 
         # Interrupt mechanism for breaking out of tool loops
@@ -1867,6 +1872,18 @@ class AIAgent:
             )
         except Exception as _tlg_err:
             logger.warning("Tool loop guardrail config ignored: %s", _tlg_err)
+        # Repetition guard for degenerate model output — detects token-level
+        # loops in streaming text (e.g. glm-5.x generating the same chunk
+        # repeatedly).  Configurable via stream_repetition_guard in config.yaml.
+        try:
+            self._stream_repetition_guard = StreamingRepetitionGuard(
+                StreamRepetitionGuardConfig.from_mapping(
+                    _agent_cfg.get("stream_repetition_guard", {})
+                )
+            )
+        except Exception as _srg_err:
+            logger.warning("Stream repetition guard config ignored: %s", _srg_err)
+            self._stream_repetition_guard = StreamingRepetitionGuard()
         # Cache only the derived auxiliary compression context override that is
         # needed later by the startup feasibility check.  Avoid exposing a
         # broad pseudo-public config object on the agent instance.
@@ -7019,6 +7036,11 @@ class AIAgent:
                         pass
                 self._record_streamed_assistant_text(tail)
         self._current_streamed_assistant_text = ""
+        # Reset the repetition guard for the next model response so it
+        # doesn't carry state from a previous degenerate turn.
+        rep_guard = getattr(self, "_stream_repetition_guard", None)
+        if rep_guard is not None:
+            rep_guard.reset()
 
     def _record_streamed_assistant_text(self, text: str) -> None:
         """Accumulate visible assistant text emitted through stream callbacks."""
@@ -7101,6 +7123,25 @@ class AIAgent:
                 text = text.lstrip("\n")
         if not text:
             return
+        # ── Repetition guard ────────────────────────────────────────
+        # Feed the text (after scrubbers, before delivery) into the
+        # repetition detector.  If it returns a string, degenerate output
+        # was detected — deliver the truncation notice once and stop.
+        rep_guard = getattr(self, "_stream_repetition_guard", None)
+        if rep_guard is not None:
+            rep_result = rep_guard.feed(text)
+            if rep_result is not None:
+                # rep_result is the truncation notice (or empty string
+                # meaning already triggered, silently swallow).
+                if rep_result:
+                    for cb in (self.stream_delta_callback, self._stream_callback):
+                        if cb is not None:
+                            try:
+                                cb(rep_result)
+                            except Exception:
+                                pass
+                    self._record_streamed_assistant_text(rep_result)
+                return
         callbacks = [cb for cb in (self.stream_delta_callback, self._stream_callback) if cb is not None]
         delivered = False
         for cb in callbacks:
