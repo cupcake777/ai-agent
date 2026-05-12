@@ -778,12 +778,12 @@ class SessionStore:
 
         now = _now()
 
-        if policy.mode in ("idle", "both"):
+        if policy.mode in {"idle", "both"}:
             idle_deadline = entry.updated_at + timedelta(minutes=policy.idle_minutes)
             if now > idle_deadline:
                 return True
 
-        if policy.mode in ("daily", "both"):
+        if policy.mode in {"daily", "both"}:
             today_reset = now.replace(
                 hour=policy.at_hour,
                 minute=0, second=0, microsecond=0,
@@ -819,12 +819,12 @@ class SessionStore:
         
         now = _now()
         
-        if policy.mode in ("idle", "both"):
+        if policy.mode in {"idle", "both"}:
             idle_deadline = entry.updated_at + timedelta(minutes=policy.idle_minutes)
             if now > idle_deadline:
                 return "idle"
         
-        if policy.mode in ("daily", "both"):
+        if policy.mode in {"daily", "both"}:
             today_reset = now.replace(
                 hour=policy.at_hour, 
                 minute=0, 
