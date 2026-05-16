@@ -1818,7 +1818,23 @@ def _cprint(text: str):
     # fails we fall back to a direct print so the line isn't lost.
     def _schedule():
         try:
-            run_in_terminal(lambda: _pt_print(_PT_ANSI(text)))
+            # Guard against the loop closing between call_soon_threadsafe
+            # queuing _schedule and it actually executing (race with /new
+            # or other session teardown).  Without this check,
+            # run_in_terminal() calls ensure_future() which creates a
+            # Task whose coroutine is never awaited — emitting:
+            #   RuntimeWarning: coroutine 'run_in_terminal.<locals>.run'
+            #   was never awaited
+            if loop.is_closed() or not getattr(app, '_is_running', False):
+                _pt_print(_PT_ANSI(text))
+                return
+            fut = run_in_terminal(lambda: _pt_print(_PT_ANSI(text)))
+            # run_in_terminal returns a Future from ensure_future().  We
+            # must keep it referenced *and* consume the result so that
+            # Python doesn't emit "coroutine was never awaited" when the
+            # Task is garbage-collected during loop shutdown.
+            if fut is not None and hasattr(fut, 'add_done_callback'):
+                fut.add_done_callback(lambda _f: None)
         except Exception:
             try:
                 _pt_print(_PT_ANSI(text))
@@ -13471,6 +13487,19 @@ class HermesCLI:
         
         # Background thread to process inputs and run agent
         def process_loop():
+            # Suppress RuntimeWarning about unawaited coroutines from
+            # prompt_toolkit's run_in_terminal().  During /new teardown the
+            # event loop may close before the scheduled coroutine runs,
+            # producing "coroutine 'run_in_terminal.<locals>.run' was never
+            # awaited".  This is harmless — we already guard _schedule() with
+            # loop.is_closed() / app._is_running checks, and the Future gets
+            # an add_done_callback to prevent GC warnings, but prompt_toolkit
+            # itself can still emit this via its own internal ensure_future
+            # calls.  Silencing at the filter level is the only reliable fix.
+            import warnings as _w
+            _w.filterwarnings("ignore", category=RuntimeWarning,
+                              message="coroutine.*was never awaited")
+
             while not self._should_exit:
                 try:
                     # Check for pending input with timeout

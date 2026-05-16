@@ -70,6 +70,9 @@ mini-swe-agent/
 result
 website/static/api/skills-index.json
 models-dev-upstream/
-hermes_cli/tui_dist/*
-hermes_cli/scripts/
-docs/superpowers/*
+.hermes.md
+
+# Fork custom ignores
+website/
+.github/workflows/
+RELEASE_v*.md

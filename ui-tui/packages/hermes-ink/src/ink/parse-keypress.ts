@@ -49,6 +49,14 @@ const KITTY_FLAGS_RE = /^\x1b\[\?(\d+)u$/
 // Ctrl+F3 = CSI 1;5 R, etc.) — plain CSI row;col R is genuinely ambiguous.
 // eslint-disable-next-line no-control-regex
 const CURSOR_POSITION_RE = /^\x1b\[\?(\d+);(\d+)R$/
+// Plain (non-DEC-private) DSR cursor position report: CSI row ; col R
+// Some terminals and shells emit this instead of the ?-prefixed DECXCPR form
+// (e.g., bash/readline sends CSI 6n rather than CSI ? 6n, and iTerm2 responds
+// with CSI row;colR without the ? marker). Function key collisions (modified
+// F3 = CSI 1;2 R etc.) have row=1 almost exclusively, so we require row > 1
+// to avoid false positives.
+// eslint-disable-next-line no-control-regex
+const PLAIN_CPR_RE = /^\x1b\[(\d+);(\d+)R$/
 // OSC response: OSC code ; data (BEL|ST)
 // eslint-disable-next-line no-control-regex
 const OSC_RESPONSE_RE = /^\x1b\](\d+);(.*?)(?:\x07|\x1b\\)$/s
@@ -146,6 +154,18 @@ function parseTerminalResponse(s: string): TerminalResponse | null {
     }
 
     if ((m = CURSOR_POSITION_RE.exec(s))) {
+      return {
+        type: 'cursorPosition',
+        row: parseInt(m[1]!, 10),
+        col: parseInt(m[2]!, 10)
+      }
+    }
+
+    // Plain (non-DEC-private) DSR cursor position report.
+    // Must run after CURSOR_POSITION_RE so the ?-prefixed form takes priority.
+    // Row > 1 avoids false positives with modified function keys
+    // (Shift+F3 = CSI 1;2R, etc. always have row=1).
+    if ((m = PLAIN_CPR_RE.exec(s)) && parseInt(m[1]!, 10) > 1) {
       return {
         type: 'cursorPosition',
         row: parseInt(m[1]!, 10),
