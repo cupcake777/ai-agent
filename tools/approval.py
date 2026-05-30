@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 import unicodedata
-from typing import Optional
+from typing import Any, Optional
 from hermes_cli.config import cfg_get
 
 from utils import env_var_enabled, is_truthy_value
@@ -48,19 +48,68 @@ def _fire_approval_hook(hook_name: str, **kwargs) -> None:
     Only fires for the two approval-specific hooks in VALID_HOOKS:
     pre_approval_request, post_approval_response.
     """
+    # ═══ Built-in anotify: send desktop push BEFORE plugin hooks ═══
+    # Ensures notification regardless of plugin system state.
+    if hook_name == "pre_approval_request":
+        _send_anotify_approval(**kwargs)
+
     try:
         from hermes_cli.plugins import invoke_hook
     except Exception:
-        # Plugin system not available in this execution context
-        # (e.g. bare tool-only imports, minimal test environments).
         return
     try:
         invoke_hook(hook_name, **kwargs)
     except Exception as exc:
-        # invoke_hook() already swallows per-callback errors, so reaching here
-        # means the dispatch layer itself failed. Log and move on -- approval
-        # flow is safety-critical, plugin observability is not.
         logger.debug("Approval hook %s dispatch failed: %s", hook_name, exc)
+
+
+def _send_anotify_approval(
+    command: str = "",
+    description: str = "",
+    surface: str = "",
+    **__: Any,
+) -> None:
+    """Send anotify push notification for approval request.
+
+    Fire-and-forget in a daemon thread so it never blocks the approval flow.
+    """
+    import threading
+    import json
+
+    token_path = os.path.expanduser("~/ops/.secrets/anotify-token")
+    try:
+        token = open(token_path).read().strip()
+    except Exception:
+        return
+
+    cmd_preview = command[:200] + "..." if len(command) > 200 else command
+    payload = json.dumps({
+        "title": "⚠️ Hermes 需要你授权",
+        "message": f"命令: {cmd_preview}\n原因: {description}\n平台: {surface}\n\n请在 CLI/Terminal 窗口操作",
+        "priority": "high",
+        "source": "hermes-approval-builtin",
+    }).encode()
+
+    def _send():
+        import subprocess
+        try:
+            subprocess.run(
+                [
+                    "curl", "-s", "-X", "POST",
+                    "https://notify.bioinfo.pro/api/notify",
+                    "-H", "Content-Type: application/json",
+                    "-H", f"Authorization: Bearer {token}",
+                    "-d", payload.decode(),
+                    "--max-time", "5",
+                ],
+                capture_output=True,
+                timeout=6,
+            )
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_send, daemon=True)
+    t.start()
 
 
 
