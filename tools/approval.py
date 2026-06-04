@@ -48,10 +48,9 @@ def _fire_approval_hook(hook_name: str, **kwargs) -> None:
     Only fires for the two approval-specific hooks in VALID_HOOKS:
     pre_approval_request, post_approval_response.
     """
-    # ═══ Built-in anotify: send desktop push BEFORE plugin hooks ═══
-    # Ensures notification regardless of plugin system state.
-    if hook_name == "pre_approval_request":
-        _send_anotify_approval(**kwargs)
+    # Built-in anotify call removed — plugin handles notifications.
+    # Kept for reference: plugin ~/.hermes/plugins/anotify-approval/
+    # sends on pre_approval_request hook with better logging + formatting.
 
     try:
         from hermes_cli.plugins import invoke_hook
