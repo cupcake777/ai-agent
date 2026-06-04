@@ -36,6 +36,14 @@ _approval_session_key: contextvars.ContextVar[str] = contextvars.ContextVar(
     "approval_session_key",
     default="",
 )
+_approval_turn_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "approval_turn_id",
+    default="",
+)
+_approval_tool_call_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "approval_tool_call_id",
+    default="",
+)
 
 
 def _fire_approval_hook(hook_name: str, **kwargs) -> None:
@@ -57,6 +65,8 @@ def _fire_approval_hook(hook_name: str, **kwargs) -> None:
     except Exception:
         return
     try:
+        kwargs.setdefault("turn_id", _approval_turn_id.get())
+        kwargs.setdefault("tool_call_id", _approval_tool_call_id.get())
         invoke_hook(hook_name, **kwargs)
     except Exception as exc:
         logger.debug("Approval hook %s dispatch failed: %s", hook_name, exc)
@@ -122,6 +132,27 @@ def reset_current_session_key(token: contextvars.Token[str]) -> None:
     _approval_session_key.reset(token)
 
 
+def set_current_observability_context(
+    *,
+    turn_id: str = "",
+    tool_call_id: str = "",
+) -> tuple[contextvars.Token[str], contextvars.Token[str]]:
+    """Bind active tool correlation IDs to approval hooks."""
+    return (
+        _approval_turn_id.set(turn_id or ""),
+        _approval_tool_call_id.set(tool_call_id or ""),
+    )
+
+
+def reset_current_observability_context(
+    tokens: tuple[contextvars.Token[str], contextvars.Token[str]],
+) -> None:
+    """Restore prior approval hook correlation IDs."""
+    turn_token, tool_token = tokens
+    _approval_tool_call_id.reset(tool_token)
+    _approval_turn_id.reset(turn_token)
+
+
 def get_current_session_key(default: str = "default") -> str:
     """Return the active session key, preferring context-local state.
 
@@ -176,6 +207,20 @@ _HERMES_ENV_PATH = (
     r'(?:\$hermes_home|\$\{hermes_home\})/)'
     r'\.env\b'
 )
+# ~/.hermes/config.yaml IS the security policy: approvals.mode, yolo, and the
+# permanent-approval allowlist live here, and the config cache is mtime-keyed
+# so a write takes effect mid-session (the agent could flip approvals.mode=off
+# and immediately bypass the gate). Pair the write_file/patch deny (file_tools
+# _check_sensitive_path) with terminal-side coverage so `sed -i`, `tee`, `>`,
+# `cp`, etc. targeting it are gated too — otherwise the deny is unpaired
+# theater. Mirrors _HERMES_ENV_PATH; matches the HERMES_HOME override form as
+# well as ~/.hermes/.
+_HERMES_CONFIG_PATH = (
+    r'(?:~\/\.hermes/|'
+    r'(?:\$home|\$\{home\})/\.hermes/|'
+    r'(?:\$hermes_home|\$\{hermes_home\})/)'
+    r'config\.yaml\b'
+)
 _PROJECT_ENV_PATH = r'(?:(?:/|\.{1,2}/)?(?:[^\s/"\'`]+/)*\.env(?:\.[^/\s"\'`]+)*)'
 _PROJECT_CONFIG_PATH = r'(?:(?:/|\.{1,2}/)?(?:[^\s/"\'`]+/)*config\.yaml)'
 _SHELL_RC_FILES = (
@@ -201,6 +246,7 @@ _SENSITIVE_WRITE_TARGET = (
     rf'(?:{_SYSTEM_CONFIG_PATH}|/dev/sd|'
     rf'{_SSH_SENSITIVE_PATH}|'
     rf'{_HERMES_ENV_PATH}|'
+    rf'{_HERMES_CONFIG_PATH}|'
     rf'{_SHELL_RC_FILES}|'
     rf'{_CREDENTIAL_FILES})'
 )
@@ -439,6 +485,12 @@ DANGEROUS_PATTERNS = [
     (rf'\b(cp|mv|install)\b.*\s["\']?{_PROJECT_SENSITIVE_WRITE_TARGET}["\']?{_COMMAND_TAIL}', "overwrite project env/config file"),
     (rf'\bsed\s+-[^\s]*i.*\s{_SYSTEM_CONFIG_PATH}', "in-place edit of system config"),
     (rf'\bsed\s+--in-place\b.*\s{_SYSTEM_CONFIG_PATH}', "in-place edit of system config (long flag)"),
+    # In-place edit of a Hermes-managed security file (~/.hermes/config.yaml or
+    # .env). sed -i bypasses the redirection/tee patterns above because it
+    # mutates the file directly. Pairs the file_tools write_file/patch deny so
+    # the terminal side is not an open door. See #14639.
+    (rf'\bsed\s+-[^\s]*i.*(?:{_HERMES_CONFIG_PATH}|{_HERMES_ENV_PATH})', "in-place edit of Hermes config/env"),
+    (rf'\bsed\s+--in-place\b.*(?:{_HERMES_CONFIG_PATH}|{_HERMES_ENV_PATH})', "in-place edit of Hermes config/env (long flag)"),
     # Script execution via heredoc — bypasses the -e/-c flag patterns above.
     # `python3 << 'EOF'` feeds arbitrary code via stdin without -c/-e flags.
     (r'\b(python[23]?|perl|ruby|node)\s+<<', "script execution via heredoc"),
