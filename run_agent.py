@@ -3230,6 +3230,16 @@ class AIAgent:
             import httpx as _httpx
             import socket as _socket
 
+            # Rewrite OpenAI SDK's User-Agent header to avoid Cloudflare WAF
+            # blocks on custom endpoints behind Cloudflare.  The openai library
+            # injects "OpenAI/Python X.Y.Z" on every request, which some
+            # Cloudflare rules interpret as a bot UA and block with 403.
+            # httpx event hooks fire after the request is built but before it
+            # is sent, so they can override the UA that the SDK injected.
+            def _rewrite_ua(request):
+                if request.headers.get("user-agent", "").startswith("OpenAI/Python"):
+                    request.headers["user-agent"] = "python-httpx/0.28.1"
+
             _sock_opts = [(_socket.SOL_SOCKET, _socket.SO_KEEPALIVE, 1)]
             if hasattr(_socket, "TCP_KEEPIDLE"):
                 _sock_opts.append((_socket.IPPROTO_TCP, _socket.TCP_KEEPIDLE, 30))
@@ -3245,6 +3255,7 @@ class AIAgent:
             return _httpx.Client(
                 transport=_httpx.HTTPTransport(socket_options=_sock_opts),
                 proxy=_proxy,
+                event_hooks={"request": [_rewrite_ua]},
             )
         except Exception:
             return None
