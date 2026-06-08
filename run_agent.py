@@ -3990,6 +3990,9 @@ class AIAgent:
                         pass
                 self._record_streamed_assistant_text(tail)
         self._current_streamed_assistant_text = ""
+        rep_guard = getattr(self, "_stream_repetition_guard", None)
+        if rep_guard is not None:
+            rep_guard.reset()
 
     def _record_streamed_assistant_text(self, text: str) -> None:
         """Accumulate visible assistant text emitted through stream callbacks."""
@@ -4072,6 +4075,19 @@ class AIAgent:
                 text = text.lstrip("\n")
         if not text:
             return
+        rep_guard = getattr(self, "_stream_repetition_guard", None)
+        if rep_guard is not None:
+            rep_result = rep_guard.feed(text)
+            if rep_result is not None:
+                if rep_result:
+                    for cb in (self.stream_delta_callback, self._stream_callback):
+                        if cb is not None:
+                            try:
+                                cb(rep_result)
+                            except Exception:
+                                pass
+                    self._record_streamed_assistant_text(rep_result)
+                return
         callbacks = [cb for cb in (self.stream_delta_callback, self._stream_callback) if cb is not None]
         delivered = False
         for cb in callbacks:

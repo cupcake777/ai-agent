@@ -42,6 +42,10 @@ from agent.model_metadata import (
 from agent.process_bootstrap import _install_safe_stdio
 from agent.subdirectory_hints import SubdirectoryHintTracker
 from agent.think_scrubber import StreamingThinkScrubber
+from agent.stream_repetition_guard import (
+    StreamRepetitionGuardConfig,
+    StreamingRepetitionGuard,
+)
 from agent.tool_guardrails import (
     ToolCallGuardrailConfig,
     ToolCallGuardrailController,
@@ -428,6 +432,7 @@ def init_agent(
     # even when stream consumers are registered (no tokens streaming then)
     agent._executing_tools = False
     agent._tool_guardrails = ToolCallGuardrailController()
+    agent._stream_repetition_guard = StreamingRepetitionGuard()
     agent._tool_guardrail_halt_decision: ToolGuardrailDecision | None = None
 
     # Interrupt mechanism for breaking out of tool loops
@@ -1094,6 +1099,15 @@ def init_agent(
         )
     except Exception as _tlg_err:
         _ra().logger.warning("Tool loop guardrail config ignored: %s", _tlg_err)
+    try:
+        agent._stream_repetition_guard = StreamingRepetitionGuard(
+            StreamRepetitionGuardConfig.from_mapping(
+                _agent_cfg.get("stream_repetition_guard", {})
+            )
+        )
+    except Exception as _srg_err:
+        _ra().logger.warning("Stream repetition guard config ignored: %s", _srg_err)
+        agent._stream_repetition_guard = StreamingRepetitionGuard()
     # Cache only the derived auxiliary compression context override that is
     # needed later by the startup feasibility check.  Avoid exposing a
     # broad pseudo-public config object on the agent instance.
