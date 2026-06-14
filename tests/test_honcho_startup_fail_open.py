@@ -170,6 +170,85 @@ def test_honcho_sync_turn_does_not_start_network_write_before_session_init():
         provider._init_thread.join(timeout=1)
 
 
+def test_honcho_sync_turn_enqueues_without_waiting_for_network_write():
+    """A slow prior Honcho write must not block the next user-visible turn."""
+    provider = HonchoMemoryProvider()
+    cfg = _configured_hybrid_config()
+    network_release = threading.Event()
+    save_calls = []
+
+    class Session(SimpleNamespace):
+        def add_message(self, role, content):
+            self.messages.append({"role": role, "content": content})
+
+    class AsyncManager:
+        def __init__(self):
+            self.session = Session(messages=[])
+
+        def get_or_create(self, session_key):
+            return self.session
+
+        def get_cached(self, session_key):
+            return self.session
+
+        def save(self, session):
+            save_calls.append(session)
+
+    provider._config = cfg
+    provider._manager = AsyncManager()
+    provider._session_key = "test-session"
+    provider._session_initialized = True
+    provider._sync_thread = threading.Thread(
+        target=lambda: network_release.wait(timeout=5), daemon=True
+    )
+    provider._sync_thread.start()
+
+    try:
+        start = time.perf_counter()
+        provider.sync_turn("hello", "world")
+        elapsed = time.perf_counter() - start
+
+        assert elapsed < 0.5
+        assert len(save_calls) == 1
+        assert len(provider._manager.session.messages) == 2
+    finally:
+        network_release.set()
+        provider._sync_thread.join(timeout=1)
+
+
+def test_honcho_session_end_queues_async_flush_without_blocking():
+    """Session teardown must not wait on Honcho network flushes."""
+    provider = HonchoMemoryProvider()
+    cfg = _configured_hybrid_config()
+    provider._config = cfg
+    provider._session_key = "test-session"
+    provider._session_initialized = True
+    provider._sync_thread = None
+
+    class SlowFlushManager:
+        def __init__(self):
+            self.queued = False
+            self.flushed = False
+
+        def enqueue_flush_all(self):
+            self.queued = True
+            return 1
+
+        def flush_all(self):
+            self.flushed = True
+            time.sleep(5)
+
+    provider._manager = SlowFlushManager()
+
+    start = time.perf_counter()
+    provider.on_session_end([{"role": "user", "content": "hi"}])
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 0.5
+    assert provider._manager.queued is True
+    assert provider._manager.flushed is False
+
+
 def test_honcho_sync_turn_waits_for_full_background_startup(monkeypatch):
     """Manager assignment alone is not readiness while background init continues."""
     provider = HonchoMemoryProvider()

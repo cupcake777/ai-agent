@@ -1216,23 +1216,19 @@ class HonchoMemoryProvider(MemoryProvider):
         clean_user_content = sanitize_context(user_content or "").strip()
         clean_assistant_content = sanitize_context(assistant_content or "").strip()
 
-        def _sync():
-            try:
-                session = self._manager.get_or_create(self._session_key)
-                for chunk in self._chunk_message(clean_user_content, msg_limit):
-                    session.add_message("user", chunk)
-                for chunk in self._chunk_message(clean_assistant_content, msg_limit):
-                    session.add_message("assistant", chunk)
-                self._manager._flush_session(session)
-            except Exception as e:
-                logger.debug("Honcho sync_turn failed: %s", e)
-
-        if self._sync_thread and self._sync_thread.is_alive():
-            self._sync_thread.join(timeout=5.0)
-        self._sync_thread = threading.Thread(
-            target=_sync, daemon=True, name="honcho-sync"
-        )
-        self._sync_thread.start()
+        try:
+            get_cached = getattr(self._manager, "get_cached", None)
+            session = get_cached(self._session_key) if callable(get_cached) else None
+            if session is None:
+                logger.debug("Honcho sync_turn skipped: session cache is not ready")
+                return
+            for chunk in self._chunk_message(clean_user_content, msg_limit):
+                session.add_message("user", chunk)
+            for chunk in self._chunk_message(clean_assistant_content, msg_limit):
+                session.add_message("assistant", chunk)
+            self._manager.save(session)
+        except Exception as e:
+            logger.debug("Honcho sync_turn enqueue failed: %s", e)
 
     def on_memory_write(
         self,
@@ -1275,13 +1271,14 @@ class HonchoMemoryProvider(MemoryProvider):
             return
         if not self._session_initialized and self._init_thread and self._init_thread.is_alive():
             return
-        # Wait for pending sync
-        if self._sync_thread and self._sync_thread.is_alive():
-            self._sync_thread.join(timeout=10.0)
         try:
-            self._manager.flush_all()
+            if hasattr(self._manager, "enqueue_flush_all"):
+                queued = self._manager.enqueue_flush_all()
+                logger.debug("Honcho queued %d session(s) for async session-end flush", queued)
+            elif getattr(self._config, "write_frequency", "async") != "async":
+                self._manager.flush_all()
         except Exception as e:
-            logger.debug("Honcho session-end flush failed: %s", e)
+            logger.debug("Honcho session-end enqueue failed: %s", e)
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         """Return tool schemas, respecting recall_mode.

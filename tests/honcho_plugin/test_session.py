@@ -568,7 +568,7 @@ class TestConcludeToolDispatch:
         provider._config = SimpleNamespace(message_max_chars=25000)
 
         session = MagicMock()
-        provider._manager.get_or_create.return_value = session
+        provider._manager.get_cached.return_value = session
 
         provider.sync_turn(
             (
@@ -588,10 +588,10 @@ class TestConcludeToolDispatch:
                 "Visible answer"
             ),
         )
-        provider._sync_thread.join(timeout=1.0)
-
         assert session.add_message.call_args_list[0].args == ("user", "hello")
         assert session.add_message.call_args_list[1].args == ("assistant", "Visible answer")
+        provider._manager.save.assert_called_once_with(session)
+        assert provider._sync_thread is None
 
 
 # ---------------------------------------------------------------------------
@@ -1661,9 +1661,10 @@ class TestDialecticLifecycleSmoke:
             "turn 8 retries because turn 7's empty result didn't advance cadence"
         assert provider._last_dialectic_turn == 8, "retry success advances"
 
-        # ---- session end: flush messages ----
+        # ---- session end: queue async flush without blocking ----
         provider.on_session_end([])
-        mgr.flush_all.assert_called()
+        mgr.enqueue_flush_all.assert_called()
+        mgr.flush_all.assert_not_called()
 
 
 class TestReasoningHeuristic:

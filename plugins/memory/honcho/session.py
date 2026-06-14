@@ -416,6 +416,11 @@ class HonchoSessionManager:
             self._cache[key] = session
         return session
 
+    def get_cached(self, key: str) -> HonchoSession | None:
+        """Return a local cached session without performing Honcho I/O."""
+        with self._cache_lock:
+            return self._cache.get(key)
+
     def _flush_session(self, session: HonchoSession) -> bool:
         """Internal: write unsynced messages to Honcho synchronously."""
         if not session.messages:
@@ -518,6 +523,23 @@ class HonchoSessionManager:
             if self._turn_counter % wf == 0:
                 self._flush_session(session)
 
+    def enqueue_flush_all(self) -> int:
+        """Queue all cached sessions for background flushing without blocking.
+
+        This is the safe path for session lifecycle hooks: it preserves pending
+        messages for the daemon writer but never waits on Honcho network I/O.
+        Returns the number of sessions queued.
+        """
+        if self._async_queue is None:
+            return 0
+        with self._cache_lock:
+            sessions = list(self._cache.values())
+        queued = 0
+        for session in sessions:
+            self._async_queue.put(session)
+            queued += 1
+        return queued
+
     def flush_all(self) -> None:
         """Flush all pending unsynced messages for all cached sessions.
 
@@ -532,7 +554,9 @@ class HonchoSessionManager:
             except Exception as e:
                 logger.error("Honcho flush_all error for %s: %s", session.key, e)
 
-        # Drain async queue synchronously if it exists
+        # Drain async queue synchronously if it exists. This method is an
+        # explicit blocking flush for tests/manual shutdown only; session-end
+        # hooks use enqueue_flush_all() to avoid user-visible latency.
         if self._async_queue is not None:
             while not self._async_queue.empty():
                 try:
@@ -542,12 +566,19 @@ class HonchoSessionManager:
                 except queue.Empty:
                     break
 
-    def shutdown(self) -> None:
-        """Gracefully shut down the async writer thread."""
+    def shutdown(self, *, drain: bool = False, timeout: float = 1.0) -> None:
+        """Stop the async writer thread.
+
+        By default this does not drain pending network writes. Hermes session
+        teardown must not block on Honcho availability; queued messages remain
+        best-effort daemon work. Pass drain=True only from explicit maintenance
+        paths that are allowed to wait.
+        """
         if self._async_queue is not None and self._async_thread is not None:
-            self.flush_all()
+            if drain:
+                self.flush_all()
             self._async_queue.put(_ASYNC_SHUTDOWN)
-            self._async_thread.join(timeout=10)
+            self._async_thread.join(timeout=timeout)
 
     def delete(self, key: str) -> bool:
         """Delete a session from local cache."""
