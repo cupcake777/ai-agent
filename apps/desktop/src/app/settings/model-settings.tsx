@@ -78,6 +78,12 @@ const AUX_TASKS: readonly AuxTaskMeta[] = [
 
 const NO_PROVIDERS: readonly ModelOptionProvider[] = [{ name: '—', slug: '', models: [] }]
 
+// Radix <Select> renders a blank trigger when `value` matches no <SelectItem>.
+// A custom model (e.g. one added via config that isn't in the provider's
+// curated list) would vanish — surface the active value so it stays selectable.
+export const withActive = (models: readonly string[], active: string): readonly string[] =>
+  active && !models.includes(active) ? [active, ...models] : models
+
 interface StaleAuxWarningProps {
   applying: boolean
   onReset: () => void
@@ -555,7 +561,7 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
                   <SelectValue placeholder={m.model} />
                 </SelectTrigger>
                 <SelectContent>
-                  {(selectedProviderModels.length ? selectedProviderModels : []).map(model => (
+                  {withActive(selectedProviderModels, selectedModel).map(model => (
                     <SelectItem key={model} value={model}>
                       {model}
                     </SelectItem>
@@ -708,7 +714,7 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
                           <SelectValue placeholder={m.model} />
                         </SelectTrigger>
                         <SelectContent>
-                          {(auxDraftProviderModels.length ? auxDraftProviderModels : []).map(model => (
+                          {withActive(auxDraftProviderModels, auxDraft.model).map(model => (
                             <SelectItem key={model} value={model}>
                               {model}
                             </SelectItem>
@@ -772,9 +778,13 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
             </Select>
             <Button
               disabled={applying}
-              onClick={() =>
-                setMoa(prev => prev && { ...prev, default_preset: selectedMoaPreset || prev.default_preset })
-              }
+              onClick={() => {
+                const next: MoaConfigResponse = {
+                  ...moa,
+                  default_preset: selectedMoaPreset || moa.default_preset
+                }
+                void saveMoa(next)
+              }}
               size="sm"
               variant="text"
             >
@@ -783,23 +793,21 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
             <Button
               disabled={Object.keys(moa.presets).length <= 1 || applying}
               onClick={() => {
-                setMoa(prev => {
-                  if (!prev || Object.keys(prev.presets).length <= 1) {
-                    return prev
-                  }
+                if (Object.keys(moa.presets).length <= 1) {
+                  return
+                }
 
-                  const next = { ...prev.presets }
-                  delete next[selectedMoaPreset]
-                  const fallback = Object.keys(next)[0]
-
-                  return {
-                    ...prev,
-                    presets: next,
-                    default_preset: prev.default_preset === selectedMoaPreset ? fallback : prev.default_preset,
-                    active_preset: prev.active_preset === selectedMoaPreset ? '' : prev.active_preset
-                  }
-                })
+                const presets = { ...moa.presets }
+                delete presets[selectedMoaPreset]
+                const fallback = Object.keys(presets)[0]
+                const next: MoaConfigResponse = {
+                  ...moa,
+                  presets,
+                  default_preset: moa.default_preset === selectedMoaPreset ? fallback : moa.default_preset,
+                  active_preset: moa.active_preset === selectedMoaPreset ? '' : moa.active_preset
+                }
                 setSelectedMoaPreset(Object.keys(moa.presets).find(name => name !== selectedMoaPreset) || '')
+                void saveMoa(next)
               }}
               size="sm"
               variant="ghost"
@@ -816,18 +824,16 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
               disabled={!newMoaPresetName.trim() || !!moa.presets[newMoaPresetName.trim()] || applying}
               onClick={() => {
                 const name = newMoaPresetName.trim()
-                setMoa(
-                  prev =>
-                    prev && {
-                      ...prev,
-                      presets: {
-                        ...prev.presets,
-                        [name]: { ...currentMoaPreset, reference_models: [...currentMoaPreset.reference_models] }
-                      }
-                    }
-                )
+                const next: MoaConfigResponse = {
+                  ...moa,
+                  presets: {
+                    ...moa.presets,
+                    [name]: { ...currentMoaPreset, reference_models: [...currentMoaPreset.reference_models] }
+                  }
+                }
                 setSelectedMoaPreset(name)
                 setNewMoaPresetName('')
+                void saveMoa(next)
               }}
               size="sm"
               variant="textStrong"
@@ -880,7 +886,7 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
                         <SelectValue placeholder={m.model} />
                       </SelectTrigger>
                       <SelectContent>
-                        {modelsForProvider(slot.provider).map(model => (
+                        {withActive(modelsForProvider(slot.provider), slot.model).map(model => (
                           <SelectItem key={model} value={model}>
                             {model}
                           </SelectItem>
@@ -957,7 +963,10 @@ export function ModelSettings({ onMainModelChanged }: ModelSettingsProps) {
                       <SelectValue placeholder={m.model} />
                     </SelectTrigger>
                     <SelectContent>
-                      {modelsForProvider(currentMoaPreset.aggregator.provider).map(model => (
+                      {withActive(
+                        modelsForProvider(currentMoaPreset.aggregator.provider),
+                        currentMoaPreset.aggregator.model
+                      ).map(model => (
                         <SelectItem key={model} value={model}>
                           {model}
                         </SelectItem>
