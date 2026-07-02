@@ -159,9 +159,26 @@ def build_keepalive_http_client(
         import httpx
         import socket
 
+        def _rewrite_openai_user_agent(request):
+            # The OpenAI SDK injects bot-identifying headers after client-level
+            # default headers are merged. Some Cloudflare-fronted custom
+            # OpenAI-compatible endpoints block auxiliary calls on those headers
+            # even though main-agent calls rewrite them. Keep aux parity here.
+            ua = request.headers.get("user-agent", "")
+            if ua.startswith("OpenAI/Python") or ua.startswith("AsyncOpenAI/Python"):
+                request.headers["user-agent"] = "python-httpx/0.28.1"
+            for name in list(request.headers.keys()):
+                if name.lower().startswith("x-stainless"):
+                    del request.headers[name]
+
+        async def _rewrite_openai_user_agent_async(request):
+            _rewrite_openai_user_agent(request)
+
+        request_hook = _rewrite_openai_user_agent_async if async_mode else _rewrite_openai_user_agent
+
         if "api.githubcopilot.com" in str(base_url or "").lower():
             client_cls = httpx.AsyncClient if async_mode else httpx.Client
-            return client_cls()
+            return client_cls(event_hooks={"request": [request_hook]})
 
         sock_opts = [(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)]
         if hasattr(socket, "TCP_KEEPIDLE"):
@@ -177,6 +194,7 @@ def build_keepalive_http_client(
         return client_cls(
             transport=transport_cls(socket_options=sock_opts),
             proxy=proxy,
+            event_hooks={"request": [request_hook]},
         )
     except Exception:
         return None
