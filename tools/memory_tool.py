@@ -1076,6 +1076,18 @@ def memory_tool(
     if target not in {"memory", "user"}:
         return tool_error(f"Invalid target '{target}'. Use 'memory' or 'user'.", success=False)
 
+    if str(os.environ.get("HERMES_MEMORY_EVAL", "")).strip().lower() in {"1", "true", "yes", "on"}:
+        if operations or action in {"add", "replace", "remove"}:
+            return json.dumps(
+                {
+                    "success": True,
+                    "done": True,
+                    "skipped": True,
+                    "message": "Memory write skipped: HERMES_MEMORY_EVAL is set, so benchmark runs are read-only.",
+                },
+                ensure_ascii=False,
+            )
+
     # --- Batch path -------------------------------------------------------
     if operations:
         if not isinstance(operations, list):

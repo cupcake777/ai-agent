@@ -323,8 +323,8 @@ class TestMemoryStoreReplace:
         store.add("memory", "Python 3.11 project")
         result = store.replace("memory", "3.11", "Python 3.12 project")
         assert result["success"] is True
-        assert "Python 3.12 project" in store.memory_entries
-        assert "Python 3.11 project" not in store.memory_entries
+        assert any(entry.endswith("Python 3.12 project") for entry in store.memory_entries)
+        assert all("Python 3.11 project" not in entry for entry in store.memory_entries)
 
     def test_replace_no_match(self, store):
         store.add("memory", "fact A")
@@ -542,6 +542,20 @@ class TestMemoryToolDispatcher:
     def test_add_via_tool(self, store):
         result = json.loads(memory_tool(action="add", target="memory", content="via tool", store=store))
         assert result["success"] is True
+
+    def test_memory_eval_env_makes_writes_read_only(self, store, monkeypatch):
+        monkeypatch.setenv("HERMES_MEMORY_EVAL", "1")
+
+        single = json.loads(memory_tool(action="add", target="memory", content="eval fact", store=store))
+        batch = json.loads(memory_tool(
+            target="memory",
+            operations=[{"action": "add", "content": "eval batch fact"}],
+            store=store,
+        ))
+
+        assert single["skipped"] is True
+        assert batch["skipped"] is True
+        assert store.memory_entries == []
 
     def test_replace_requires_old_text(self, store):
         # Missing old_text on a single-op replace is recoverable, not a dead-end:

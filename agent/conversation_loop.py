@@ -68,6 +68,11 @@ from utils import base_url_host_matches, env_var_enabled
 
 logger = logging.getLogger(__name__)
 
+# When a large-context primary fails over to a smaller fallback, do not send the
+# already-built oversized prompt straight to the fallback. Keep a safety margin
+# for tool schemas, output tokens, and provider-side tokenization differences.
+FALLBACK_DOWNSHIFT_CONTEXT_FRACTION = 0.75
+
 # Stable prefix of the local interrupt status string emitted when a turn is
 # cancelled while waiting on the provider. Surfaces (ACP, TUI) match on this
 # to treat it as cancellation metadata rather than assistant prose.
@@ -145,6 +150,93 @@ def _ollama_context_limit_error(agent: Any, request_tokens: int) -> Optional[str
         "model context). If you manage the model through an Ollama Modelfile, "
         "set `PARAMETER num_ctx 65536` there instead."
     )
+
+
+def _downshift_context_for_fallback_if_needed(
+    agent: Any,
+    messages: List[Dict[str, Any]],
+    api_messages: List[Dict[str, Any]],
+    active_system_prompt: str,
+    system_message: Optional[str],
+    task_id: str,
+    retry_state: TurnRetryState,
+    *,
+    reason: Optional[FailoverReason] = None,
+) -> tuple[bool, List[Dict[str, Any]], str]:
+    """Activate fallback and compress first if the current prompt won't fit.
+
+    Primary models can run with 300K-1M token windows while configured
+    fallbacks are often 64K-128K. Fallback is not useful if we immediately
+    replay a 300K-token prompt into an 87K-token provider. This helper wraps
+    ``agent._try_activate_fallback`` and, after the fallback has updated the
+    context compressor to the target model, forces one compression restart when
+    the current request exceeds a conservative fraction of the fallback window.
+    """
+    if not agent._try_activate_fallback(reason=reason):
+        return False, messages, active_system_prompt
+
+    compressor = getattr(agent, "context_compressor", None)
+    fallback_context = int(getattr(compressor, "context_length", 0) or 0)
+    if fallback_context <= 0:
+        retry_state.primary_recovery_attempted = False
+        return True, messages, active_system_prompt
+
+    try:
+        request_tokens = estimate_request_tokens_rough(
+            api_messages,
+            tools=getattr(agent, "tools", None) or None,
+        )
+    except Exception:
+        request_tokens = estimate_messages_tokens_rough(messages)
+
+    safe_limit = max(1, int(fallback_context * FALLBACK_DOWNSHIFT_CONTEXT_FRACTION))
+    if request_tokens <= safe_limit:
+        retry_state.primary_recovery_attempted = False
+        return True, messages, active_system_prompt
+
+    if not getattr(agent, "compression_enabled", True):
+        try:
+            agent._emit_warning(
+                f"⚠ Current context (~{request_tokens:,} tokens) is too large "
+                f"for fallback model `{getattr(agent, 'model', 'unknown')}` "
+                f"(safe limit ~{safe_limit:,}), but compression is disabled."
+            )
+        except Exception:
+            pass
+        retry_state.primary_recovery_attempted = False
+        return True, messages, active_system_prompt
+
+    agent._buffer_status(
+        f"🗜️ Downshifting context for fallback model "
+        f"{getattr(agent, 'model', 'unknown')} "
+        f"(~{request_tokens:,} → ≤{safe_limit:,} tokens)..."
+    )
+    compressed_messages, new_system_prompt = agent._compress_context(
+        messages,
+        system_message,
+        approx_tokens=request_tokens,
+        task_id=task_id,
+        focus_topic=(
+            "Compress for fallback model with a smaller context window. "
+            "Preserve the current user request, recent tool results, concrete "
+            "file paths, commands, errors, decisions, and safety constraints. "
+            "Drop stale intermediate chatter and verbose historical logs."
+        ),
+    )
+    if len(compressed_messages) < len(messages) or compressed_messages is not messages:
+        retry_state.restart_with_compressed_messages = True
+        retry_state.primary_recovery_attempted = False
+        return True, compressed_messages, new_system_prompt
+
+    try:
+        agent._emit_warning(
+            "⚠ Fallback context downshift attempted, but compression produced "
+            "no smaller prompt; trying fallback with existing context."
+        )
+    except Exception:
+        pass
+    retry_state.primary_recovery_attempted = False
+    return True, messages, active_system_prompt
 
 
 def _ra():
@@ -3087,7 +3179,22 @@ def run_conversation(
                             )
                         else:
                             agent._buffer_status("⚠️ Rate limited — switching to fallback provider...")
-                        if agent._try_activate_fallback(reason=classified.reason):
+                        _fb_activated, messages, active_system_prompt = _downshift_context_for_fallback_if_needed(
+                            agent,
+                            messages,
+                            api_messages,
+                            active_system_prompt,
+                            system_message,
+                            effective_task_id,
+                            _retry,
+                            reason=classified.reason,
+                        )
+                        if _fb_activated:
+                            if _retry.restart_with_compressed_messages:
+                                conversation_history = conversation_history_after_compression(
+                                    agent, messages
+                                )
+                                break
                             active_system_prompt = _sync_failover_system_message(
                                 agent, api_messages, active_system_prompt)
                             retry_count = 0
@@ -3120,7 +3227,22 @@ def run_conversation(
                         "🔐 Authentication failed and could not be refreshed — "
                         "switching to fallback provider..."
                     )
-                    if agent._try_activate_fallback(reason=classified.reason):
+                    _fb_activated, messages, active_system_prompt = _downshift_context_for_fallback_if_needed(
+                        agent,
+                        messages,
+                        api_messages,
+                        active_system_prompt,
+                        system_message,
+                        effective_task_id,
+                        _retry,
+                        reason=classified.reason,
+                    )
+                    if _fb_activated:
+                        if _retry.restart_with_compressed_messages:
+                            conversation_history = conversation_history_after_compression(
+                                agent, messages
+                            )
+                            break
                         active_system_prompt = _sync_failover_system_message(
                             agent, api_messages, active_system_prompt)
                         retry_count = 0

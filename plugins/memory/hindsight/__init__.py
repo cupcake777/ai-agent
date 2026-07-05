@@ -124,6 +124,23 @@ def _export_port_health_grace_timeout(config: dict[str, Any]) -> None:
     os.environ.setdefault(_PORT_HEALTH_GRACE_ENV, repr(seconds))
 
 
+def _memory_eval_mode() -> bool:
+    """Return True when Hermes is running a local memory benchmark/eval.
+
+    The memory benchmark probes recall/tool behaviour by launching real
+    ``hermes chat`` subprocesses. Those subprocesses may read the configured
+    Hindsight bank, but they must not write benchmark prompts or answers back
+    into the user's long-term bank. The runner sets ``HERMES_MEMORY_EVAL=1``;
+    centralize the guard here so every benchmark path gets the same safety rail.
+    """
+    return str(os.environ.get("HERMES_MEMORY_EVAL", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _check_local_runtime() -> tuple[bool, str | None]:
     """Return whether local embedded Hindsight imports cleanly.
 
@@ -1332,6 +1349,13 @@ class HindsightMemoryProvider(MemoryProvider):
 
         # Retain controls
         self._auto_retain = self._config.get("auto_retain", True)
+        if _memory_eval_mode() and self._auto_retain:
+            self._auto_retain = False
+            logger.info(
+                "Hindsight auto_retain disabled because HERMES_MEMORY_EVAL is set "
+                "(bank=%s remains readable but benchmark turns are not retained)",
+                self._bank_id,
+            )
         self._retain_every_n_turns = max(1, int(self._config.get("retain_every_n_turns", 1)))
         self._retain_context = self._config.get("retain_context", "conversation between Hermes Agent and the User")
 
@@ -1702,6 +1726,15 @@ class HindsightMemoryProvider(MemoryProvider):
 
     def handle_tool_call(self, tool_name: str, args: dict, **kwargs) -> str:
         if tool_name == "hindsight_retain":
+            if _memory_eval_mode():
+                logger.info(
+                    "Tool hindsight_retain skipped because HERMES_MEMORY_EVAL is set "
+                    "(bank=%s remains read-only for this benchmark run)",
+                    self._bank_id,
+                )
+                return json.dumps({
+                    "result": "Memory retain skipped: HERMES_MEMORY_EVAL is set, so benchmark runs are read-only."
+                })
             content = args.get("content", "")
             if not content:
                 return tool_error("Missing required parameter: content")

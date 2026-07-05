@@ -10,6 +10,7 @@ import os
 import re
 import stat
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -27,6 +28,7 @@ from plugins.memory.hindsight import (
     _normalize_retain_tags,
     _resolve_bank_id_template,
     _sanitize_bank_segment,
+    _memory_eval_mode,
 )
 
 
@@ -254,6 +256,15 @@ def test_normalize_observation_scopes_list_of_lists():
     ]
 
 
+def test_memory_eval_runner_documents_mock_or_scratch_bank_requirement():
+    runner = Path("/root/ops/bin/memory-eval.py")
+    text = runner.read_text(encoding="utf-8")
+
+    assert 'env.setdefault("HERMES_MEMORY_EVAL", "1")' in text
+    assert "mocked provider/client" in text
+    assert "production bank" in text
+
+
 # ---------------------------------------------------------------------------
 # Schema tests
 # ---------------------------------------------------------------------------
@@ -381,6 +392,28 @@ class TestConfig:
         assert p._recall_prompt_preamble == "Custom preamble:"
         assert p._recall_max_input_chars == 500
         assert p._bank_mission == "Test agent mission"
+
+    def test_memory_eval_env_disables_auto_retain_only(self, provider_with_config, monkeypatch):
+        monkeypatch.setenv("HERMES_MEMORY_EVAL", "1")
+
+        p = provider_with_config(auto_retain=True, auto_recall=True)
+
+        assert _memory_eval_mode() is True
+        assert p._auto_retain is False
+        assert p._auto_recall is True
+        assert p.get_tool_schemas() == [RETAIN_SCHEMA, RECALL_SCHEMA, REFLECT_SCHEMA]
+
+    def test_memory_eval_env_blocks_explicit_hindsight_retain(self, provider_with_config, monkeypatch):
+        monkeypatch.setenv("HERMES_MEMORY_EVAL", "1")
+        p = provider_with_config(auto_retain=True)
+
+        p.sync_turn("benchmark prompt", "benchmark answer")
+        p._retain_queue.join()
+        p._client.aretain_batch.assert_not_called()
+
+        result = json.loads(p.handle_tool_call("hindsight_retain", {"content": "benchmark fact"}))
+        assert "skipped" in result["result"]
+        p._client.aretain_batch.assert_not_called()
 
     def test_config_from_env_fallback(self, tmp_path, monkeypatch):
         """When no config file exists, falls back to env vars."""
