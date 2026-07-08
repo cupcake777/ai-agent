@@ -9028,35 +9028,46 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # created.  Sentinels have no get_activity_summary(), so the
             # idle check below would always evaluate to inf >= timeout and
             # immediately evict them, racing with the setup path.
-            _stale_idle = float("inf")  # assume idle if we can't check
+            _stale_idle: float | None = None
             _stale_detail = ""
             if _stale_agent and hasattr(_stale_agent, "get_activity_summary"):
                 try:
                     _sa = _stale_agent.get_activity_summary()
-                    _stale_idle = _sa.get("seconds_since_activity", float("inf"))
-                    _stale_detail = (
-                        f" | last_activity={_sa.get('last_activity_desc', 'unknown')} "
-                        f"({_stale_idle:.0f}s ago) "
-                        f"| iteration={_sa.get('api_call_count', 0)}/{_sa.get('max_iterations', 0)}"
-                    )
+                    if isinstance(_sa, dict):
+                        _raw_idle = _sa.get("seconds_since_activity")
+                        if isinstance(_raw_idle, (int, float)) and not isinstance(_raw_idle, bool):
+                            _stale_idle = float(_raw_idle)
+                            _stale_detail = (
+                                f" | last_activity={_sa.get('last_activity_desc', 'unknown')} "
+                                f"({_stale_idle:.0f}s ago) "
+                                f"| iteration={_sa.get('api_call_count', 0)}/{_sa.get('max_iterations', 0)}"
+                            )
                 except Exception:
                     pass
             # Evict if: agent is idle beyond timeout, OR wall-clock age is
             # extreme (10x timeout or 2h, whichever is larger — catches
-            # cases where the agent object was garbage-collected).
+            # cases where the agent object was garbage-collected).  Mocked or
+            # malformed activity summaries are treated as "unknown", not as
+            # idle, so capacity accounting cannot be bypassed accidentally.
             _wall_ttl = max(_raw_stale_timeout * 10, 7200) if _raw_stale_timeout > 0 else float("inf")
+            _idle_timed_out = (
+                _raw_stale_timeout > 0
+                and _stale_idle is not None
+                and _stale_idle >= _raw_stale_timeout
+            )
             _should_evict = (
                 _stale_agent is not _AGENT_PENDING_SENTINEL
                 and (
-                    (_raw_stale_timeout > 0 and _stale_idle >= _raw_stale_timeout)
+                    _idle_timed_out
                     or _stale_age > _wall_ttl
                 )
             )
             if _should_evict:
+                _idle_for_log = _stale_idle if _stale_idle is not None else -1.0
                 logger.warning(
                     "Evicting stale _running_agents entry for %s "
                     "(age: %.0fs, idle: %.0fs, timeout: %.0fs)%s",
-                    _quick_key, _stale_age, _stale_idle,
+                    _quick_key, _stale_age, _idle_for_log,
                     _raw_stale_timeout, _stale_detail,
                 )
                 self._invalidate_session_run_generation(
@@ -15439,24 +15450,40 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         "honcho.runtime_peer_prefix",
         "honcho.user_peer_aliases",
     )
-    _HONCHO_CACHE_BUSTING_MEMO: dict[tuple[str, int | None], dict[str, Any]] = {}
+    _HONCHO_CACHE_BUSTING_MEMO: dict[
+        tuple[str, tuple[int, int, int] | None], dict[str, Any]
+    ] = {}
 
     @classmethod
     def _empty_honcho_cache_busting_config(cls) -> dict[str, Any]:
         return {key: None for key in cls._HONCHO_CACHE_BUSTING_KEYS}
 
+    @staticmethod
+    def _honcho_cache_busting_fingerprint(path: Path) -> tuple[int, int, int] | None:
+        """Return a file fingerprint for the legacy Honcho config memo.
+
+        Some filesystems can report the same mtime for rapid consecutive writes.
+        Include size and ctime so a changed honcho.json does not reuse a stale
+        parse result when the optional Honcho provider is explicitly enabled.
+        """
+        try:
+            stat_result = path.stat()
+        except OSError:
+            return None
+        return (
+            int(stat_result.st_mtime_ns),
+            int(stat_result.st_ctime_ns),
+            int(stat_result.st_size),
+        )
+
     @classmethod
     def _extract_honcho_cache_busting_config(cls) -> dict[str, Any]:
-        """Extract Honcho identity keys, memoized by honcho.json mtime."""
+        """Extract legacy Honcho identity keys when Honcho is explicitly active."""
         try:
             from plugins.memory.honcho.client import HonchoClientConfig, resolve_config_path
 
             path = resolve_config_path()
-            try:
-                mtime_ns = path.stat().st_mtime_ns
-            except OSError:
-                mtime_ns = None
-            memo_key = (str(path), mtime_ns)
+            memo_key = (str(path), cls._honcho_cache_busting_fingerprint(path))
             cached = cls._HONCHO_CACHE_BUSTING_MEMO.get(memo_key)
             if cached is not None:
                 return dict(cached)
