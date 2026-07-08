@@ -105,9 +105,12 @@ def _build_subprocess_env() -> dict[str, str]:
     # (gateway bot tokens, GitHub auth, infra) are still stripped (#29157).
     env = hermes_subprocess_env(inherit_credentials=True)
     home = _resolve_home_dir()
+    # Copilot stores OAuth/session material under the user's real HOME.  The
+    # central subprocess helper may switch HOME to {HERMES_HOME}/home in
+    # container/profile-isolated mode, so restore the OS/user home after the
+    # helper has performed its secret filtering and HERMES_REAL_HOME injection.
     env["HOME"] = home
-    from hermes_constants import apply_subprocess_home_env
-    apply_subprocess_home_env(env)
+    env["HERMES_REAL_HOME"] = home
     return env
 
 
