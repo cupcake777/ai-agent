@@ -18,6 +18,7 @@ Environment variables:
 import asyncio
 import email as email_lib
 import imaplib
+import json
 import logging
 import os
 import re
@@ -163,12 +164,15 @@ def check_email_requirements() -> bool:
 
     Treats blank/whitespace-only values as missing so an abandoned setup that
     left empty ``EMAIL_*`` keys in ``.env`` does not enable the platform (#40715).
+    Outbound delivery can use either SMTP (``EMAIL_SMTP_HOST``) or Resend
+    (``RESEND_API_KEY``), but inbound IMAP settings are always required.
     """
     addr = os.getenv("EMAIL_ADDRESS", "").strip()
     pwd = os.getenv("EMAIL_PASSWORD", "").strip()
     imap = os.getenv("EMAIL_IMAP_HOST", "").strip()
     smtp = os.getenv("EMAIL_SMTP_HOST", "").strip()
-    return all([addr, pwd, imap, smtp])
+    resend = os.getenv("RESEND_API_KEY", "").strip()
+    return all([addr, pwd, imap]) and bool(smtp or resend)
 
 
 def _decode_header_value(raw: str) -> str:
@@ -440,6 +444,7 @@ class EmailAdapter(BasePlatformAdapter):
         self._imap_port = env_int("EMAIL_IMAP_PORT", 993)
         self._smtp_host = (os.getenv("EMAIL_SMTP_HOST", "") or extra.get("smtp_host", "")).strip()
         self._smtp_port = env_int("EMAIL_SMTP_PORT", 587)
+        self._resend_api_key = os.getenv("RESEND_API_KEY", "").strip()
         self._poll_interval = env_int("EMAIL_POLL_INTERVAL", 15)
 
         # Skip attachments — configured via config.yaml:
@@ -553,16 +558,14 @@ class EmailAdapter(BasePlatformAdapter):
         # Validate up front so a missing host surfaces as an actionable config
         # error instead of IMAP4_SSL("") raising the cryptic
         # ``[Errno 8] nodename nor servname provided, or not known``.
-        missing = [
-            name
-            for name, value in (
-                ("EMAIL_ADDRESS", self._address),
-                ("EMAIL_PASSWORD", self._password),
-                ("EMAIL_IMAP_HOST", self._imap_host),
-                ("EMAIL_SMTP_HOST", self._smtp_host),
-            )
-            if not value
+        required = [
+            ("EMAIL_ADDRESS", self._address),
+            ("EMAIL_PASSWORD", self._password),
+            ("EMAIL_IMAP_HOST", self._imap_host),
         ]
+        if not self._resend_api_key:
+            required.append(("EMAIL_SMTP_HOST", self._smtp_host))
+        missing = [name for name, value in required if not value]
         if missing:
             message = (
                 "Not configured — missing "
@@ -599,17 +602,20 @@ class EmailAdapter(BasePlatformAdapter):
             logger.error("[Email] IMAP connection failed: %s", e)
             return False
 
-        try:
-            # Test SMTP connection
-            smtp = self._connect_smtp()
+        if self._resend_api_key:
+            logger.info("[Email] Resend configured; skipping SMTP connection test.")
+        else:
             try:
-                smtp.login(self._address, self._password)
-            finally:
-                smtp.quit()
-            logger.info("[Email] SMTP connection test passed.")
-        except Exception as e:
-            logger.error("[Email] SMTP connection failed: %s", e)
-            return False
+                # Test SMTP connection
+                smtp = self._connect_smtp()
+                try:
+                    smtp.login(self._address, self._password)
+                finally:
+                    smtp.quit()
+                logger.info("[Email] SMTP connection test passed.")
+            except Exception as e:
+                logger.error("[Email] SMTP connection failed: %s", e)
+                return False
 
         self._running = True
         self._poll_task = asyncio.create_task(self._poll_loop())
@@ -924,7 +930,10 @@ class EmailAdapter(BasePlatformAdapter):
         body: str,
         reply_to_msg_id: Optional[str] = None,
     ) -> str:
-        """Send an email via SMTP. Runs in executor thread."""
+        """Send an email via SMTP or Resend. Runs in executor thread."""
+        if self._resend_api_key:
+            return self._send_via_resend(to_addr, body, reply_to_msg_id)
+
         msg = MIMEMultipart()
         msg["From"] = self._address
         msg["To"] = to_addr
@@ -960,6 +969,68 @@ class EmailAdapter(BasePlatformAdapter):
 
         logger.info("[Email] Sent reply to %s (subject: %s)", to_addr, subject)
         return msg_id
+
+    def _send_via_resend(
+        self,
+        to_addr: str,
+        body: str,
+        reply_to_msg_id: Optional[str] = None,
+    ) -> str:
+        """Send a plain-text email through the Resend HTTP API.
+
+        This keeps the receive side on IMAP while allowing outbound delivery
+        without SMTP credentials. It intentionally uses only the standard
+        library so enabling Resend does not add an optional dependency.
+        """
+        from urllib import error as urllib_error
+        from urllib import request as urllib_request
+
+        ctx = self._thread_context.get(to_addr, {})
+        subject = ctx.get("subject", "Hermes Agent")
+        if not subject.startswith("Re:"):
+            subject = f"Re: {subject}"
+
+        original_msg_id = reply_to_msg_id or ctx.get("message_id")
+        headers: Dict[str, str] = {}
+        if original_msg_id:
+            headers["In-Reply-To"] = original_msg_id
+            headers["References"] = original_msg_id
+
+        payload: Dict[str, Any] = {
+            "from": self._address,
+            "to": [to_addr],
+            "subject": subject,
+            "text": body,
+        }
+        if headers:
+            payload["headers"] = headers
+
+        api_url = os.getenv("RESEND_API_URL", "https://api.resend.com/emails").strip()
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib_request.Request(
+            api_url,
+            data=data,
+            headers={
+                "Authorization": f"Bearer {self._resend_api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib_request.urlopen(req, timeout=SMTP_CONNECT_TIMEOUT) as resp:
+                raw = resp.read().decode("utf-8")
+        except urllib_error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Resend API failed with HTTP {e.code}: {detail}") from e
+
+        try:
+            parsed = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            parsed = {}
+        message_id = str(parsed.get("id") or f"resend-{uuid.uuid4().hex[:12]}")
+        logger.info("[Email] Sent reply to %s via Resend (subject: %s)", to_addr, subject)
+        return message_id
 
     async def send_typing(self, chat_id: str, metadata: Optional[Dict[str, Any]] = None) -> None:
         """Email has no typing indicator — no-op."""
