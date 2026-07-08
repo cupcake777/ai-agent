@@ -1596,6 +1596,21 @@ def build_skills_system_prompt(
             except Exception as e:
                 logger.debug("Could not read external skill description %s: %s", desc_file, e)
 
+    # Config-driven demotion: keep every skill discoverable by name, but omit
+    # descriptions for all categories when skills.compact_all is enabled. This
+    # cuts the fixed prompt cost of large skill libraries; skill_view still
+    # loads the full procedure on demand.
+    try:
+        from hermes_cli.config import load_config
+        _skills_cfg = (load_config() or {}).get("skills", {}) or {}
+        if bool(_skills_cfg.get("compact_all", False)):
+            compact_categories = frozenset(
+                set(compact_categories or frozenset())
+                | {cat.split("/", 1)[0] for cat in skills_by_category}
+            )
+    except Exception:
+        pass
+
     # Posture-driven category demotion (e.g. non-coding skills while pairing
     # on code). Demoted categories stay in the index as a single names-only
     # line — descriptions are dropped to cut noise, but every skill name

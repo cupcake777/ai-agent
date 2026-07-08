@@ -765,6 +765,46 @@ class MemoryStore:
         limit = self._char_limit(target)
         content = ENTRY_DELIMITER.join(rendered_entries)
         current = len(content)
+
+        # Optional prompt-only truncation. The memory files and write budget
+        # remain unchanged; this only caps how much L1 memory is injected into
+        # every model request. Entries are already priority-sorted, so clipping
+        # the tail preserves the highest-priority corrections and environment
+        # facts while avoiding huge fixed prompts for trivial chat messages.
+        prompt_limit = 0
+        try:
+            _cfg_path = Path(get_hermes_home()) / "config.yaml"
+            if _cfg_path.exists():
+                import yaml
+                with open(_cfg_path, "r", encoding="utf-8") as _f:
+                    _cfg = yaml.safe_load(_f) or {}
+                _mem_cfg = _cfg.get("memory", {}) or {}
+                key = "user_prompt_char_limit" if target == "user" else "memory_prompt_char_limit"
+                prompt_limit = int(_mem_cfg.get(key, 0) or 0)
+        except Exception:
+            prompt_limit = 0
+
+        if prompt_limit and len(content) > prompt_limit:
+            clipped: List[str] = []
+            used = 0
+            omitted = 0
+            delim_len = len(ENTRY_DELIMITER)
+            for entry in rendered_entries:
+                extra = len(entry) + (delim_len if clipped else 0)
+                if used + extra > prompt_limit:
+                    omitted += 1
+                    continue
+                clipped.append(entry)
+                used += extra
+            if clipped:
+                content = ENTRY_DELIMITER.join(clipped)
+                if omitted:
+                    content += (
+                        f"\n§\n[Prompt injection truncated: {omitted} lower-priority "
+                        f"entries omitted from this request only; use memory/session_search "
+                        f"when needed.]"
+                    )
+
         pct = min(100, int((current / limit) * 100)) if limit > 0 else 0
 
         if target == "user":
