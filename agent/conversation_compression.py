@@ -72,6 +72,48 @@ def _compression_lock_holder(agent: Any) -> str:
     )
 
 
+def _record_request_level_compression_effectiveness(
+    compressor: Any,
+    *,
+    before_tokens: Optional[int],
+    after_tokens: Optional[int],
+    previous_ineffective_count: int,
+) -> None:
+    """Update anti-thrash state using full request pressure.
+
+    ``ContextCompressor.compress()`` can only estimate the compacted message
+    list. The auto-compression gates, however, are driven by full request
+    pressure: messages + system prompt + tool schemas. Tool-heavy sessions can
+    therefore look like an effective message-level compression while the next
+    actual request is barely smaller, causing repeated compactions around the
+    threshold. Reconcile the anti-thrash counters once the caller has the full
+    post-compression request estimate.
+    """
+    try:
+        before = int(before_tokens or 0)
+        after = int(after_tokens or 0)
+    except (TypeError, ValueError):
+        return
+    if before <= 0 or after <= 0:
+        return
+
+    saved = before - after
+    savings_pct = (saved / before * 100) if before > 0 else 0.0
+    compressor._last_compression_savings_pct = savings_pct
+    if savings_pct < 10:
+        compressor._ineffective_compression_count = previous_ineffective_count + 1
+        logger.warning(
+            "Compression saved only %.1f%% at request level "
+            "(~%s -> ~%s tokens); ineffective_compression_count=%d",
+            savings_pct,
+            f"{before:,}",
+            f"{after:,}",
+            compressor._ineffective_compression_count,
+        )
+    else:
+        compressor._ineffective_compression_count = 0
+
+
 class _CompressionLockLeaseRefresher:
     def __init__(
         self,
@@ -635,8 +677,16 @@ def compress_context(
         except Exception:
             pass
 
+    _pre_ineffective_count = int(
+        getattr(agent.context_compressor, "_ineffective_compression_count", 0) or 0
+    )
     try:
-        compressed = agent.context_compressor.compress(messages, current_tokens=approx_tokens, focus_topic=focus_topic, force=force)
+        compressed = agent.context_compressor.compress(
+            messages,
+            current_tokens=approx_tokens,
+            focus_topic=focus_topic,
+            force=force,
+        )
     except TypeError:
         # Plugin context engine with strict signature that doesn't accept
         # focus_topic / force — fall back to calling without them.
@@ -956,6 +1006,12 @@ def compress_context(
             compressed,
             system_prompt=new_system_prompt or "",
             tools=agent.tools or None,
+        )
+        _record_request_level_compression_effectiveness(
+            agent.context_compressor,
+            before_tokens=approx_tokens,
+            after_tokens=_compressed_est,
+            previous_ineffective_count=_pre_ineffective_count,
         )
         agent.context_compressor.last_compression_rough_tokens = _compressed_est
         agent.context_compressor.last_prompt_tokens = -1

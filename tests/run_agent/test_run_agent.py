@@ -623,6 +623,15 @@ class TestExtractReasoning:
         # structured field was found first → content-list branch skipped
         assert result == "from structured field"
 
+    def test_non_string_reasoning_fields_ignored(self, agent):
+        """Mock/provider-shaped objects must not crash reasoning assembly."""
+        msg = _mock_assistant_msg(
+            reasoning=MagicMock(),
+            reasoning_content=MagicMock(),
+            reasoning_details=[{"summary": MagicMock()}],
+        )
+        assert agent._extract_reasoning(msg) is None
+
 
 class TestSessionJsonSnapshotOptIn:
     """Regression: per-session JSON snapshot writer is opt-in via config.

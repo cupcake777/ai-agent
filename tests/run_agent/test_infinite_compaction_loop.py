@@ -19,6 +19,7 @@ from unittest.mock import patch, MagicMock
 import time
 
 from agent.context_compressor import ContextCompressor, _CHARS_PER_TOKEN
+from agent.conversation_compression import _record_request_level_compression_effectiveness
 
 
 # ---------------------------------------------------------------------------
@@ -34,6 +35,9 @@ def _make_compressor(**kwargs) -> ContextCompressor:
         quiet_mode=True,
     )
     defaults.update(kwargs)
+    # 96K < 512K, so the small-context floor raises the effective
+    # threshold_percent to 0.75 -> threshold_tokens = 72_000. Tests use
+    # 73_000 as the "over threshold" probe value.
     with patch("agent.context_compressor.get_model_context_length", return_value=96000):
         return ContextCompressor(**defaults)
 
@@ -68,14 +72,14 @@ class TestCompressNoOpRegistersIneffective:
         )
         # A large session that passes the min_for_compress check
         messages = _build_session(10, words_per_turn=10)
-        comp.last_prompt_tokens = 65_000
+        comp.last_prompt_tokens = 73_000
 
         # Mock _find_tail_cut_by_tokens to return head_end,
         # causing compress_start >= compress_end
         original = comp._find_tail_cut_by_tokens
         comp._find_tail_cut_by_tokens = lambda msgs, he: he  # force no-op
 
-        result = comp.compress(messages, current_tokens=65_000)
+        result = comp.compress(messages, current_tokens=73_000)
 
         assert comp._ineffective_compression_count >= 1, (
             f"Expected ineffective_compression_count >= 1, got {comp._ineffective_compression_count}"
@@ -88,10 +92,10 @@ class TestCompressNoOpRegistersIneffective:
             config_context_length=96000,
         )
         messages = _build_session(10, words_per_turn=10)
-        comp.last_prompt_tokens = 65_000
+        comp.last_prompt_tokens = 73_000
         comp._find_tail_cut_by_tokens = lambda msgs, he: he  # force no-op
 
-        comp.compress(messages, current_tokens=65_000)
+        comp.compress(messages, current_tokens=73_000)
 
         assert comp._last_compression_savings_pct == 0.0
 
@@ -102,14 +106,14 @@ class TestCompressNoOpRegistersIneffective:
             config_context_length=96000,
         )
         messages = _build_session(10, words_per_turn=10)
-        comp.last_prompt_tokens = 65_000
+        comp.last_prompt_tokens = 73_000
         comp._find_tail_cut_by_tokens = lambda msgs, he: he  # force no-op
 
-        comp.compress(messages, current_tokens=65_000)
-        comp.compress(messages, current_tokens=65_000)
+        comp.compress(messages, current_tokens=73_000)
+        comp.compress(messages, current_tokens=73_000)
 
         assert comp._ineffective_compression_count >= 2
-        assert not comp.should_compress(65_000), (
+        assert not comp.should_compress(73_000), (
             "should_compress should return False after 2+ ineffective compressions"
         )
 
@@ -120,11 +124,11 @@ class TestCompressNoOpRegistersIneffective:
             config_context_length=96000,
         )
         messages = _build_session(10, words_per_turn=10)
-        comp.last_prompt_tokens = 65_000
+        comp.last_prompt_tokens = 73_000
         original_cut = comp._find_tail_cut_by_tokens
         comp._find_tail_cut_by_tokens = lambda msgs, he: he  # force no-op
 
-        result = comp.compress(messages, current_tokens=65_000)
+        result = comp.compress(messages, current_tokens=73_000)
 
         assert len(result) == len(messages), (
             f"Expected unchanged message count {len(messages)}, got {len(result)}"
@@ -214,9 +218,9 @@ class TestEffectiveCompressionResetsCounter:
         )
         messages = _build_session(30, words_per_turn=100)
         comp._generate_summary = MagicMock(return_value="Compacted summary of earlier turns.")
-        comp.last_prompt_tokens = 65_000
+        comp.last_prompt_tokens = 73_000
 
-        comp.compress(messages, current_tokens=65_000)
+        comp.compress(messages, current_tokens=73_000)
 
         assert comp._ineffective_compression_count == 0, (
             f"Expected 0 ineffective compressions with effective compression, "
@@ -234,22 +238,64 @@ class TestAntiThrashing:
     def test_ineffective_count_2_blocks(self):
         """_ineffective_compression_count >= 2 -> should_compress returns False."""
         comp = _make_compressor(config_context_length=96000)
-        comp.last_prompt_tokens = 65_000
+        comp.last_prompt_tokens = 73_000
         comp._ineffective_compression_count = 2
-        assert not comp.should_compress(65_000)
+        assert not comp.should_compress(73_000)
 
     def test_ineffective_count_1_allows(self):
         """_ineffective_compression_count = 1 -> should_compress still True."""
         comp = _make_compressor(config_context_length=96000)
-        comp.last_prompt_tokens = 65_000
+        comp.last_prompt_tokens = 73_000
         comp._ineffective_compression_count = 1
-        assert comp.should_compress(65_000)
+        assert comp.should_compress(73_000)
 
     def test_below_threshold_allows(self):
         """Tokens below threshold -> should_compress returns False regardless."""
         comp = _make_compressor(config_context_length=96000)
         comp.last_prompt_tokens = 10_000
         assert not comp.should_compress(10_000)
+
+    def test_request_level_low_savings_blocks_after_two_passes(self):
+        """Full request pressure, not message-only size, drives anti-thrash.
+
+        A tool-heavy request can look smaller at message level while the full
+        request barely moves once system prompt + tool schemas are included.
+        Two such compactions must stop automatic re-compression.
+        """
+        comp = _make_compressor(config_context_length=128000)
+        comp.threshold_tokens = 64_000
+
+        _record_request_level_compression_effectiveness(
+            comp,
+            before_tokens=80_747,
+            after_tokens=80_692,
+            previous_ineffective_count=0,
+        )
+        assert comp._ineffective_compression_count == 1
+        assert comp.should_compress(80_692)
+
+        _record_request_level_compression_effectiveness(
+            comp,
+            before_tokens=83_971,
+            after_tokens=79_138,
+            previous_ineffective_count=comp._ineffective_compression_count,
+        )
+        assert comp._ineffective_compression_count == 2
+        assert not comp.should_compress(79_138)
+
+    def test_request_level_effective_savings_resets_counter(self):
+        """A useful full-request reduction clears prior anti-thrash state."""
+        comp = _make_compressor(config_context_length=128000)
+        comp._ineffective_compression_count = 2
+
+        _record_request_level_compression_effectiveness(
+            comp,
+            before_tokens=95_682,
+            after_tokens=48_309,
+            previous_ineffective_count=2,
+        )
+
+        assert comp._ineffective_compression_count == 0
 
 
 # ---------------------------------------------------------------------------
@@ -266,23 +312,23 @@ class TestCooldownGuard:
         """A future cooldown deadline -> should_compress returns False even
         when tokens are over threshold."""
         comp = _make_compressor(config_context_length=96000)
-        comp.last_prompt_tokens = 65_000
+        comp.last_prompt_tokens = 73_000
         comp._summary_failure_cooldown_until = time.monotonic() + 60
-        assert not comp.should_compress(65_000)
+        assert not comp.should_compress(73_000)
 
     def test_expired_cooldown_allows(self):
         """A past cooldown deadline -> compression resumes normally."""
         comp = _make_compressor(config_context_length=96000)
-        comp.last_prompt_tokens = 65_000
+        comp.last_prompt_tokens = 73_000
         comp._summary_failure_cooldown_until = time.monotonic() - 1
-        assert comp.should_compress(65_000)
+        assert comp.should_compress(73_000)
 
     def test_no_cooldown_allows(self):
         """The default (no cooldown set) does not block compression."""
         comp = _make_compressor(config_context_length=96000)
-        comp.last_prompt_tokens = 65_000
+        comp.last_prompt_tokens = 73_000
         assert comp._summary_failure_cooldown_until == 0.0
-        assert comp.should_compress(65_000)
+        assert comp.should_compress(73_000)
 
 
 # ---------------------------------------------------------------------------
