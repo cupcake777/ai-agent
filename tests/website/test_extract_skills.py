@@ -23,6 +23,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXTRACT = REPO_ROOT / "website" / "scripts" / "extract-skills.py"
+pytestmark = pytest.mark.skipif(
+    not EXTRACT.exists(), reason="website/ is intentionally pruned in this fork"
+)
 
 
 @pytest.fixture(scope="module")

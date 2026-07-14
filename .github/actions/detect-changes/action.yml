@@ -6,6 +6,12 @@ description: >-
   events and fail open (everything "true") when the diff cannot be computed.
 
 outputs:
+  event_name:
+    description: Triggering GitHub event name.
+    value: ${{ steps.classify.outputs.event_name }}
+  site_present:
+    description: Whether this checkout contains the docs-site package.
+    value: ${{ steps.classify.outputs.site_present }}
   python:
     description: Run Python tests / ruff / ty / windows-footguns.
     value: ${{ steps.classify.outputs.python }}
@@ -59,4 +65,10 @@ runs:
 
         echo "Changed files:"
         printf '%s\n' "${CHANGED:-(none)}"
+        echo "event_name=${EVENT_NAME}" >> "$GITHUB_OUTPUT"
+        if [ -f website/package.json ]; then
+          echo "site_present=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "site_present=false" >> "$GITHUB_OUTPUT"
+        fi
         printf '%s\n' "${CHANGED:-}" | python3 scripts/ci/classify_changes.py

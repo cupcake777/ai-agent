@@ -82,13 +82,17 @@ def test_normalize_swallows_recovery_exceptions():
     assert normalized is src
 
 
-def test_override_key_matches_message_turn_key_after_recovery():
+def test_override_key_matches_message_turn_key_after_recovery(monkeypatch):
     """The bug, end to end at the key level.
 
     /model arrives as a lobby reply (thread_id="").  The next message turn
     runs recovery and lands on the bound topic ("42").  After the fix, the
     key the command stores under must equal the key the message turn reads.
     """
+    # This regression exercises per-topic keys. Unified DM mode intentionally
+    # collapses all Telegram DM topics into one key and makes the comparison
+    # below meaningless; developer profiles may enable it via ~/.hermes/.env.
+    monkeypatch.delenv("UNIFIED_DM_SESSION", raising=False)
     runner = _make_runner(recovered_thread_id="42")
 
     # --- /model command path (raw inbound is a lobby reply) ---

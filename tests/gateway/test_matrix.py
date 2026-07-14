@@ -2608,14 +2608,17 @@ class TestMatrixDiagnostics:
 
         from plugins.platforms.matrix.adapter import get_matrix_capabilities
 
-        docs = (
+        docs_path = (
             Path(__file__).resolve().parents[2]
             / "website"
             / "docs"
             / "user-guide"
             / "messaging"
             / "matrix.md"
-        ).read_text()
+        )
+        if not docs_path.exists():
+            pytest.skip("website/ is intentionally pruned in this fork")
+        docs = docs_path.read_text()
 
         for capability, status in get_matrix_capabilities().items():
             assert f"| {capability} | {status} |" in docs

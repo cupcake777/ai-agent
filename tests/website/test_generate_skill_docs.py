@@ -19,6 +19,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GENERATOR = REPO_ROOT / "website" / "scripts" / "generate-skill-docs.py"
+pytestmark = pytest.mark.skipif(
+    not GENERATOR.exists(), reason="website/ is intentionally pruned in this fork"
+)
 
 
 @pytest.fixture(scope="module")

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILL_MD = REPO_ROOT / "skills" / "social-media" / "xurl" / "SKILL.md"
@@ -12,6 +13,9 @@ DOC_MD = (
     / "bundled"
     / "social-media"
     / "social-media-xurl.md"
+)
+pytestmark = pytest.mark.skipif(
+    not DOC_MD.exists(), reason="website/ is intentionally pruned in this fork"
 )
 
 

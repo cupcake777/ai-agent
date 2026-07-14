@@ -234,6 +234,8 @@ class TestDocsGenerator:
             Path(__file__).resolve().parents[2]
             / "website" / "scripts" / "extract-automation-blueprints.py"
         )
+        if not script.exists():
+            pytest.skip("website/ is intentionally pruned in this fork")
         spec = importlib.util.spec_from_file_location("extract_cron_blueprints", script)
         assert spec is not None and spec.loader is not None
         mod = importlib.util.module_from_spec(spec)

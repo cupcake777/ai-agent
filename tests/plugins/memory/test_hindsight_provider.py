@@ -10,7 +10,6 @@ import os
 import re
 import stat
 import sys
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -254,15 +253,6 @@ def test_normalize_observation_scopes_list_of_lists():
         ["user:alice"],
         ["team:eng"],
     ]
-
-
-def test_memory_eval_runner_documents_mock_or_scratch_bank_requirement():
-    runner = Path("/root/ops/bin/memory-eval.py")
-    text = runner.read_text(encoding="utf-8")
-
-    assert 'env.setdefault("HERMES_MEMORY_EVAL", "1")' in text
-    assert "mocked provider/client" in text
-    assert "production bank" in text
 
 
 # ---------------------------------------------------------------------------

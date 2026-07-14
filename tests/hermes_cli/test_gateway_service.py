@@ -540,6 +540,11 @@ class TestGeneratedSystemdUnits:
             "_get_restart_drain_timeout",
             lambda: DEFAULT_GATEWAY_RESTART_DRAIN_TIMEOUT,
         )
+        monkeypatch.setattr(
+            gateway_cli,
+            "_system_service_identity",
+            lambda run_as_user=None: ("alice", "alice", "/home/alice"),
+        )
         unit = gateway_cli.generate_systemd_unit(system=True)
 
         assert "ExecStart=" in unit
@@ -2235,6 +2240,11 @@ class TestGeneratedUnitIncludesLocalBin:
             gateway_cli,
             "_build_user_local_paths",
             lambda home_path, existing: [str(home_path / ".local" / "bin")],
+        )
+        monkeypatch.setattr(
+            gateway_cli,
+            "_system_service_identity",
+            lambda run_as_user=None: ("alice", "alice", "/home/alice"),
         )
         unit = gateway_cli.generate_systemd_unit(system=True)
         # System unit uses the resolved home dir from _system_service_identity

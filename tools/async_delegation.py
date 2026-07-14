@@ -910,12 +910,16 @@ def interrupt_for_session(
     return count
 
 
-def _reset_for_tests() -> None:
-    """Test-only: clear all state and tear down the executor."""
+def _reset_for_tests(*, wait: bool = False) -> None:
+    """Test-only: clear state and tear down the executor.
+
+    ``wait=True`` prevents a worker from a previous test publishing a stale
+    completion event after the next test has already started.
+    """
     global _executor, _executor_max_workers
     with _executor_lock:
         if _executor is not None:
-            _executor.shutdown(wait=False)
+            _executor.shutdown(wait=wait)
         _executor = None
         _executor_max_workers = 0
     with _records_lock:

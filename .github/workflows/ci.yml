@@ -79,7 +79,9 @@ jobs:
   docs-site:
     name: Docs Site
     needs: detect
-    if: needs.detect.outputs.site == 'true'
+    # The server-only fork intentionally prunes website/. If that package is
+    # restored later, this lane automatically becomes active again.
+    if: needs.detect.outputs.site == 'true' && needs.detect.outputs.site_present == 'true'
     uses: ./.github/workflows/docs-site-checks.yml
 
   history-check:
@@ -91,7 +93,8 @@ jobs:
   contributor-check:
     name: Check contributors
     needs: detect
-    if: needs.detect.outputs.python == 'true'
+    # Attribution is a PR-diff check. Pushes have no PR merge base.
+    if: github.event_name == 'pull_request' && needs.detect.outputs.python == 'true'
     uses: ./.github/workflows/contributor-check.yml
 
   uv-lockfile:

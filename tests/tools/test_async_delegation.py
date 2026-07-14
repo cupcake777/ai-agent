@@ -21,11 +21,11 @@ from tools.process_registry import process_registry, format_process_notification
 
 @pytest.fixture(autouse=True)
 def _clean_state():
-    ad._reset_for_tests()
+    ad._reset_for_tests(wait=True)
     while not process_registry.completion_queue.empty():
         process_registry.completion_queue.get_nowait()
     yield
-    ad._reset_for_tests()
+    ad._reset_for_tests(wait=True)
     while not process_registry.completion_queue.empty():
         process_registry.completion_queue.get_nowait()
 
