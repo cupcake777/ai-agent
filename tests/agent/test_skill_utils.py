@@ -152,8 +152,8 @@ skills:
     assert parse_count == 1
 
 
-def test_skill_config_raw_cache_invalidates_on_config_edit(tmp_path, monkeypatch):
-    """Editing config.yaml should invalidate the shared raw config cache."""
+def test_skill_config_raw_cache_invalidates_same_signature_edit(tmp_path, monkeypatch):
+    """Equal-size edits invalidate even when filesystem timestamps stay unchanged."""
     from agent import skill_utils
 
     hermes_home = tmp_path / ".hermes"
@@ -165,9 +165,22 @@ def test_skill_config_raw_cache_invalidates_on_config_edit(tmp_path, monkeypatch
     skill_utils._external_dirs_cache_clear()
     assert get_disabled_skill_names() == {"old-skill"}
 
+    original_stat = config_path.stat()
+
     config_path.write_text("skills:\n  disabled: [new-skill]\n", encoding="utf-8")
     import os
     os.utime(config_path, None)
+
+    edited_stat = config_path.stat()
+    assert edited_stat.st_size == original_stat.st_size
+    real_path_stat = type(config_path).stat
+
+    def frozen_config_stat(path, *args, **kwargs):
+        if path == config_path:
+            return original_stat
+        return real_path_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(config_path), "stat", frozen_config_stat)
 
     assert get_disabled_skill_names() == {"new-skill"}
 
