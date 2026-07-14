@@ -15,6 +15,7 @@ import hashlib
 import logging
 import os
 import re
+import secrets
 import shlex
 import sys
 import tempfile
@@ -1494,9 +1495,11 @@ _permanent_approved: set = set()
 
 class _ApprovalEntry:
     """One pending dangerous-command approval inside a gateway session."""
-    __slots__ = ("event", "data", "result", "reason")
+    __slots__ = ("approval_id", "event", "data", "result", "reason")
 
     def __init__(self, data: dict):
+        self.approval_id = str(data.get("approval_id") or secrets.token_urlsafe(18))
+        data["approval_id"] = self.approval_id
         self.event = threading.Event()
         self.data = data          # command, description, pattern_keys, …
         self.result: Optional[str] = None  # "once"|"session"|"always"|"deny"
@@ -1537,7 +1540,8 @@ def unregister_gateway_notify(session_key: str) -> None:
 
 def resolve_gateway_approval(session_key: str, choice: str,
                              resolve_all: bool = False,
-                             reason: Optional[str] = None) -> int:
+                             reason: Optional[str] = None,
+                             approval_id: str = "") -> int:
     """Called by the gateway's /approve or /deny handler to unblock
     waiting agent thread(s).
 
@@ -1555,7 +1559,16 @@ def resolve_gateway_approval(session_key: str, choice: str,
         queue = _gateway_queues.get(session_key)
         if not queue:
             return 0
-        if resolve_all:
+        if approval_id:
+            target = next(
+                (entry for entry in queue if entry.approval_id == approval_id),
+                None,
+            )
+            if target is None:
+                return 0
+            queue.remove(target)
+            targets = [target]
+        elif resolve_all:
             targets = list(queue)
             queue.clear()
         else:
@@ -2556,6 +2569,7 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
     # gateway notify callback so observers get the event in real time.
     _fire_approval_hook(
         "pre_approval_request",
+        approval_id=entry.approval_id,
         command=command,
         description=description,
         pattern_key=primary_key,
@@ -2624,6 +2638,7 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
     _outcome = "timeout" if not resolved else (choice if choice else "timeout")
     _fire_approval_hook(
         "post_approval_response",
+        approval_id=entry.approval_id,
         command=command,
         description=description,
         pattern_key=primary_key,

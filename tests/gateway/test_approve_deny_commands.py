@@ -155,6 +155,50 @@ class TestBlockingGatewayApproval:
         assert not e2.event.is_set()
         assert len(_gateway_queues[session_key]) == 1
 
+    def test_resolve_by_approval_id_targets_exact_entry(self):
+        """Desktop decisions must not resolve a different concurrent request."""
+        from tools.approval import (
+            resolve_gateway_approval,
+            _ApprovalEntry, _gateway_queues,
+        )
+        session_key = "test-exact-id"
+        first = _ApprovalEntry({"command": "first", "approval_id": "approval-first"})
+        second = _ApprovalEntry({"command": "second", "approval_id": "approval-second"})
+        _gateway_queues[session_key] = [first, second]
+
+        count = resolve_gateway_approval(
+            session_key,
+            "deny",
+            approval_id="approval-second",
+        )
+
+        assert count == 1
+        assert not first.event.is_set()
+        assert first.result is None
+        assert second.event.is_set()
+        assert second.result == "deny"
+        assert _gateway_queues[session_key] == [first]
+
+    def test_unknown_approval_id_does_not_fall_back_to_fifo(self):
+        """A stale desktop approval must never consume the oldest live request."""
+        from tools.approval import (
+            resolve_gateway_approval,
+            _ApprovalEntry, _gateway_queues,
+        )
+        session_key = "test-stale-id"
+        entry = _ApprovalEntry({"command": "live", "approval_id": "approval-live"})
+        _gateway_queues[session_key] = [entry]
+
+        count = resolve_gateway_approval(
+            session_key,
+            "once",
+            approval_id="approval-stale",
+        )
+
+        assert count == 0
+        assert not entry.event.is_set()
+        assert _gateway_queues[session_key] == [entry]
+
     def test_unregister_signals_all_entries(self):
         """unregister_gateway_notify signals all waiting entries to prevent hangs."""
         from tools.approval import (
