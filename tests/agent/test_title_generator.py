@@ -8,6 +8,7 @@ from agent.title_generator import (
     generate_title,
     auto_title_session,
     maybe_auto_title,
+    _set_portal_conversation_context,
     _title_language,
 )
 from hermes_state import SessionDB
@@ -247,6 +248,22 @@ class TestAutoTitleSession:
         with patch("agent.title_generator.generate_title", return_value="New Title"):
             auto_title_session(db, "sess-1", "hi", "hello")
             db.set_auto_title_if_empty.assert_called_once_with("sess-1", "New Title")
+
+    def test_reloads_stale_portal_tags_module(self):
+        import importlib
+
+        stale_module = MagicMock(spec=[])
+        fresh_module = MagicMock()
+
+        with (
+            patch.object(importlib, "import_module", return_value=stale_module) as import_module,
+            patch.object(importlib, "reload", return_value=fresh_module) as reload_module,
+        ):
+            _set_portal_conversation_context("conversation-1")
+
+        import_module.assert_called_once_with("agent.portal_tags")
+        reload_module.assert_called_once_with(stale_module)
+        fresh_module.set_conversation_context.assert_called_once_with("conversation-1")
 
     def test_does_not_overwrite_title_set_immediately_before_conditional_write(
         self, tmp_path

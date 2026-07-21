@@ -40,6 +40,22 @@ _TITLE_PROMPT_PINNED_LANGUAGE = (
 )
 
 
+def _set_portal_conversation_context(conversation_id: str) -> None:
+    """Set the Portal tag, healing a stale module after an in-place update."""
+    import importlib
+
+    portal_tags = importlib.import_module("agent.portal_tags")
+    setter = getattr(portal_tags, "set_conversation_context", None)
+    if setter is None:
+        portal_tags = importlib.reload(portal_tags)
+        setter = getattr(portal_tags, "set_conversation_context", None)
+    if setter is None:
+        raise ImportError(
+            "agent.portal_tags does not define set_conversation_context after reload"
+        )
+    setter(conversation_id)
+
+
 def _title_language() -> str:
     """Return configured title language, or empty string to match the user."""
     try:
@@ -291,14 +307,13 @@ def _auto_title_session(
     # consistency with the agent loop (a no-op on first exchange, where
     # titling happens, but correct if this ever runs on a continuation).
     from agent.aux_accounting import set_accounting_context
-    from agent.portal_tags import set_conversation_context
 
     conversation_id = session_id
     try:
         conversation_id = session_db.get_conversation_root(session_id) or session_id
     except Exception:
         pass
-    set_conversation_context(conversation_id)
+    _set_portal_conversation_context(conversation_id)
     # Same for the accounting context, so the title call's token usage is
     # recorded against this session (task='title_generation', #23270).
     set_accounting_context(session_db, session_id)
