@@ -17,12 +17,12 @@ import tarfile
 import tempfile
 import threading
 import time
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 try:
     import fcntl
 except ImportError:
     fcntl = None  # Windows — file locking skipped
-from pathlib import Path
 from typing import Callable
 
 from hermes_constants import get_hermes_home
@@ -129,6 +129,75 @@ def _sha256_file(path: str) -> str:
 _SYNC_BACK_MAX_RETRIES = 3
 _SYNC_BACK_BACKOFF = (2, 4, 8)  # seconds between retries
 _SYNC_BACK_MAX_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB — refuse to extract larger tars
+
+
+def _safe_extract_remote_tar(tar: tarfile.TarFile, staging: str) -> None:
+    """Extract a sandbox archive without trusting its paths or metadata.
+
+    ``filter="data"`` is only available on newer Python patch lines. Hermes
+    still supports Python 3.11 builds where passing that keyword raises
+    ``TypeError``. Keep one explicit policy on every runtime rather than using
+    an unsafe unfiltered fallback on older interpreters.
+    """
+    root = Path(staging).resolve()
+    members = tar.getmembers()
+    expanded_bytes = 0
+
+    for member in members:
+        raw_name = member.name
+        portable_name = raw_name.replace("\\", "/")
+        posix_name = PurePosixPath(portable_name)
+        windows_name = PureWindowsPath(raw_name)
+        if (
+            not raw_name
+            or posix_name.is_absolute()
+            or windows_name.is_absolute()
+            or windows_name.drive
+            or ".." in posix_name.parts
+        ):
+            raise tarfile.ExtractError(f"unsafe archive path: {raw_name!r}")
+
+        destination = (root / Path(*posix_name.parts)).resolve(strict=False)
+        try:
+            destination.relative_to(root)
+        except ValueError as exc:
+            raise tarfile.ExtractError(
+                f"archive path escapes staging directory: {raw_name!r}"
+            ) from exc
+
+        # Remote sync-back needs ordinary files and directories only. Links
+        # can redirect a later member outside staging; devices/FIFOs can cause
+        # writes or hangs. Reject them rather than trying to emulate every
+        # version-specific tarfile.data_filter edge case.
+        if not (member.isfile() or member.isdir()):
+            raise tarfile.ExtractError(
+                f"unsupported archive member type for {raw_name!r}"
+            )
+
+        if member.isfile():
+            expanded_bytes += max(0, member.size)
+            if expanded_bytes > _SYNC_BACK_MAX_BYTES:
+                raise tarfile.ExtractError(
+                    "remote tar expands beyond the sync-back size cap"
+                )
+
+        # Never apply a sandbox-controlled owner or special permission bits to
+        # host files. Preserve executability only when the archive marked an
+        # ordinary file executable; always guarantee owner read/write.
+        member.uid = getattr(os, "getuid", lambda: 0)()
+        member.gid = getattr(os, "getgid", lambda: 0)()
+        member.uname = member.gname = ""
+        mode = member.mode & 0o755
+        mode &= ~0o022
+        if member.isfile():
+            if not mode & 0o100:
+                mode &= ~0o111
+            mode |= 0o600
+        else:
+            mode |= 0o700
+        member.mode = mode
+
+    tar.extractall(staging, members=members)
 
 
 class FileSyncManager:
@@ -368,7 +437,7 @@ class FileSyncManager:
 
             with tempfile.TemporaryDirectory(prefix="hermes-sync-back-") as staging:
                 with tarfile.open(tf.name) as tar:
-                    tar.extractall(staging, filter="data")
+                    _safe_extract_remote_tar(tar, staging)
 
                 applied = 0
                 upload_only_host_paths = (

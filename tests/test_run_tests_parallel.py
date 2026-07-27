@@ -30,6 +30,24 @@ from pathlib import Path
 
 import pytest
 
+from scripts.run_tests_parallel import _default_worker_count
+
+
+def test_default_workers_match_available_cpus(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HERMES_TEST_WORKERS", raising=False)
+    monkeypatch.setattr(os, "cpu_count", lambda: 4)
+
+    assert _default_worker_count() == 4
+
+
+def test_default_workers_preserve_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HERMES_TEST_WORKERS", "7")
+    monkeypatch.setattr(os, "cpu_count", lambda: 4)
+
+    assert _default_worker_count() == 7
+
 
 # Both tests share the same handoff file: the leaker writes here, the
 # verifier reads here. We park it in $TMPDIR with a unique-per-run name
@@ -277,6 +295,62 @@ def test_positional_path_not_treated_as_flag(tmp_path: Path) -> None:
     # Discovery found the probe file (2 tests), proving the positional path
     # was consumed as a root, not forwarded to pytest as a bad flag.
     assert "test_flagprobe.py" in proc.stdout, proc.stdout
+
+
+def test_child_collection_cannot_read_live_hermes_home(tmp_path: Path) -> None:
+    """Each pytest child gets an empty HERMES_HOME before collection.
+
+    conftest's autouse fixture runs after collection, so it cannot protect
+    modules that resolve and cache HERMES_HOME while being imported.  Model a
+    developer profile with a behavioral flag in .env and prove that a probe
+    file never sees that home even at module scope.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    runner = repo_root / "scripts" / "run_tests_parallel.py"
+    live_home = tmp_path / "live-hermes-home"
+    live_home.mkdir()
+    (live_home / ".env").write_text("UNIFIED_DM_SESSION=true\n", encoding="utf-8")
+
+    probe = tmp_path / "test_home_probe.py"
+    probe.write_text(
+        textwrap.dedent(
+            f"""
+            import os
+            from pathlib import Path
+
+            COLLECTED_HOME = Path(os.environ["HERMES_HOME"])
+
+            def test_collection_home_is_isolated():
+                assert COLLECTED_HOME != Path({str(live_home)!r})
+                assert not (COLLECTED_HOME / ".env").exists()
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env["HERMES_HOME"] = str(live_home)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(runner),
+            "--files",
+            str(probe),
+            "-j",
+            "1",
+            "--file-timeout",
+            "30",
+        ],
+        cwd=repo_root,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout
+    assert "test_home_probe.py" in proc.stdout
 
 
 def test_file_retry_self_heals_and_prints_both_attempts(tmp_path: Path) -> None:

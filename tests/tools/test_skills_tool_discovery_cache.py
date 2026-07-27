@@ -1,12 +1,10 @@
 """Regression tests for the _find_all_skills discovery cache (#58985 salvage).
 
 Covers the cache-signature fix layered on the cherry-picked contributor
-commit: the original keyed the cache on the max mtime of only the TOP-LEVEL
-scan dirs, so adding/removing a skill inside a category subdir (which bumps
-the category dir's mtime, not the root's) served a stale list indefinitely.
-The signature now covers roots + immediate children (mirroring
-hermes_cli/profiles.py::_count_skills) plus the disabled-set, with a short
-TTL bounding in-place SKILL.md edit staleness.
+commit: mtime-based signatures can stay unchanged when a skill is added or
+removed within one filesystem timestamp tick, serving a stale list. The
+signature now covers the discoverable SKILL.md path set plus the disabled-set,
+with a short TTL bounding in-place SKILL.md edit staleness.
 """
 
 import time
@@ -59,13 +57,13 @@ def test_cache_hit_serves_copies_not_cache_objects(tmp_path):
 
 def test_nested_category_skill_add_invalidates(tmp_path):
     """THE bug in the original PR: a new skill inside an existing category
-    bumps the category dir's mtime only — the root-mtime key missed it."""
+    must invalidate even when directory metadata does not change."""
     _write_skill(tmp_path, "cat-a", "skill-one")
     first = st._find_all_skills()
     assert [s["name"] for s in first] == ["skill-one"]
 
-    # Freeze the ROOT dir's mtime so only the category-child signature moves
-    # (guards against filesystems bumping the parent too).
+    # Freeze the root mtime. On coarse filesystems the category mtime may also
+    # remain unchanged, so only the SKILL.md path set reliably detects this.
     root = tmp_path / "skills"
     root_stat = root.stat()
     _write_skill(tmp_path, "cat-a", "skill-two")

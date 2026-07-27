@@ -54,10 +54,8 @@ def partial_error_tree(tmp_path):
     sub = tmp_path / "sub"
     sub.mkdir()
     locked = sub / "locked.txt"
-    locked.write_text("needle in locked\n")
-    os.chmod(locked, 0o000)
+    locked.write_text("not a match\n")
     yield tmp_path
-    os.chmod(locked, 0o755)  # let pytest clean up tmp_path
 
 
 # Run every test once per available backend method.
@@ -71,6 +69,30 @@ def _search(ops, method, pattern, path, **kw):
     return fn(pattern, str(path), kw.get("file_glob"), kw.get("limit", 50),
               kw.get("offset", 0), kw.get("output_mode", "content"),
               kw.get("context", 0))
+
+
+def _search_with_partial_error(ops, method, pattern, path, **kw):
+    """Inject a deterministic tool diagnostic alongside real matches.
+
+    chmod(000) does not make a file unreadable to root, which is how
+    containerized CI and the fork's local gate often run. Preserve the real
+    backend command/output, then model rg/grep's documented partial-error
+    exit shape so this regression is user-independent.
+    """
+    real_exec = ops._exec
+    tool = "rg" if method == "_search_with_rg" else "grep"
+
+    def exec_with_diagnostic(command, *args, **kwargs):
+        result = real_exec(command, *args, **kwargs)
+        result.stdout = (
+            f"{tool}: sub/locked.txt: Permission denied (os error 13)\n"
+            + result.stdout
+        )
+        result.exit_code = 2
+        return result
+
+    ops._exec = exec_with_diagnostic
+    return _search(ops, method, pattern, path, **kw)
 
 
 @pytest.mark.parametrize("method", _METHODS)
@@ -91,7 +113,9 @@ class TestSearchErrorGuard:
     def test_partial_error_keeps_matches(self, method, partial_error_tree):
         # rg/grep exit 2 because of the unreadable file, but the readable
         # files matched. Those matches must be preserved, not discarded.
-        res = _search(_ops(partial_error_tree), method, "needle", partial_error_tree)
+        res = _search_with_partial_error(
+            _ops(partial_error_tree), method, "needle", partial_error_tree
+        )
         assert res.error is None, f"partial error wrongly surfaced: {res.error!r}"
         assert len(res.matches) >= 4
 
@@ -111,16 +135,20 @@ class TestSearchErrorGuard:
 
     def test_files_only_excludes_diagnostics(self, method, partial_error_tree):
         # files_only mode must not list a diagnostic line as a fake file path.
-        res = _search(_ops(partial_error_tree), method, "needle",
-                      partial_error_tree, output_mode="files_only")
+        res = _search_with_partial_error(
+            _ops(partial_error_tree), method, "needle",
+            partial_error_tree, output_mode="files_only"
+        )
         assert res.error is None
         assert res.files, "expected matching files"
         assert all("Permission denied" not in f and "locked.txt" not in f
                    for f in res.files), f"diagnostic leaked into files: {res.files}"
 
     def test_count_mode_with_partial_error(self, method, partial_error_tree):
-        res = _search(_ops(partial_error_tree), method, "needle",
-                      partial_error_tree, output_mode="count")
+        res = _search_with_partial_error(
+            _ops(partial_error_tree), method, "needle",
+            partial_error_tree, output_mode="count"
+        )
         assert res.error is None
         assert res.total_count >= 4
 

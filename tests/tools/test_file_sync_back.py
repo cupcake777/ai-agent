@@ -14,10 +14,47 @@ fcntl = pytest.importorskip("fcntl")
 
 from tools.environments.file_sync import (
     FileSyncManager,
+    _safe_extract_remote_tar,
     _sha256_file,
     _SYNC_BACK_BACKOFF,
     _SYNC_BACK_MAX_RETRIES,
 )
+
+
+@pytest.mark.parametrize(
+    "member_name",
+    ("../escape", "nested/../../escape", "/absolute", r"..\escape", "C:/escape"),
+)
+def test_safe_extract_rejects_paths_outside_staging(tmp_path, member_name):
+    archive = tmp_path / "unsafe.tar"
+    with tarfile.open(archive, "w") as tar:
+        info = tarfile.TarInfo(member_name)
+        info.size = 1
+        tar.addfile(info, io.BytesIO(b"x"))
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    with tarfile.open(archive) as tar:
+        with pytest.raises(tarfile.ExtractError):
+            _safe_extract_remote_tar(tar, str(staging))
+    assert not (tmp_path / "escape").exists()
+
+
+@pytest.mark.parametrize("member_type", (tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.FIFOTYPE))
+def test_safe_extract_rejects_links_and_special_files(tmp_path, member_type):
+    archive = tmp_path / "unsafe-type.tar"
+    with tarfile.open(archive, "w") as tar:
+        info = tarfile.TarInfo("unsafe")
+        info.type = member_type
+        info.linkname = "../escape"
+        tar.addfile(info)
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    with tarfile.open(archive) as tar:
+        with pytest.raises(tarfile.ExtractError):
+            _safe_extract_remote_tar(tar, str(staging))
+    assert not any(staging.iterdir())
 
 
 # ---------------------------------------------------------------------------

@@ -15,9 +15,12 @@ Placement contract (July 2026):
 
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 XURL_SKILL = REPO_ROOT / "skills" / "social-media" / "xurl" / "SKILL.md"
+DOCS_SITE_PACKAGE = REPO_ROOT / "website" / "package.json"
 X_SEARCH_DOC = REPO_ROOT / "website" / "docs" / "user-guide" / "features" / "x-search.md"
 
 
@@ -58,6 +61,13 @@ def test_xurl_skill_write_evidence_rule():
 
 
 def test_x_search_doc_separates_discovery_from_account_actions():
+    if not DOCS_SITE_PACKAGE.exists():
+        assert not X_SEARCH_DOC.exists(), (
+            "pruned docs-site checkout unexpectedly restored one generated page"
+        )
+        pytest.skip("docs-site package is intentionally pruned in this fork")
+
+    assert X_SEARCH_DOC.exists(), "docs-site checkout is missing the x_search feature page"
     text = _read(X_SEARCH_DOC)
     lowered = text.lower()
 

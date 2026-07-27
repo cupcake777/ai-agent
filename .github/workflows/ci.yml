@@ -44,6 +44,7 @@ jobs:
       python: ${{ steps.classify.outputs.python }}
       frontend: ${{ steps.classify.outputs.frontend }}
       site: ${{ steps.classify.outputs.site }}
+      site_present: ${{ steps.classify.outputs.site_present }}
       scan: ${{ steps.classify.outputs.scan }}
       deps: ${{ steps.classify.outputs.deps }}
       npm_lock: ${{ steps.classify.outputs.npm_lock }}
@@ -117,6 +118,11 @@ jobs:
     name: Check uv.lock
     needs: detect
     uses: ./.github/workflows/uv-lockfile-check.yml
+
+  infographic-check:
+    name: Check no committed infographics
+    needs: detect
+    uses: ./.github/workflows/infographic-check.yml
 
   lockfile-diff:
     name: package-lock.json diff

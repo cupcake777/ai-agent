@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import tempfile
 import subprocess
 import sys
 import threading
@@ -98,6 +99,21 @@ _DEFAULT_FILE_RETRIES = 1
 # wall-clock seconds. Used by ``--slice`` to distribute files across
 # CI jobs by estimated total time, so no one job gets all the slow files.
 _DURATIONS_FILE = "test_durations.json"
+
+
+def _default_worker_count() -> int:
+    """Return a CPU-safe default; explicit env/CLI overrides still win.
+
+    Several large files are CPU-bound and legitimately take ~180 seconds on
+    one core. Using ``cpu_count * 2`` halves their CPU share on a saturated
+    runner and pushes them past the 300-second per-file hang guard, producing
+    deterministic false timeouts. One worker per available CPU preserves
+    parallelism without oversubscribing the timeout budget.
+    """
+    configured = os.environ.get("HERMES_TEST_WORKERS")
+    if configured:
+        return max(1, int(configured))
+    return max(1, os.cpu_count() or 4)
 
 
 def _approximately_count_tests(
@@ -306,7 +322,18 @@ def _run_one_file_once(
 ) -> Tuple[Path, int, str, dict[str, int], float]:
     """Single attempt of a per-file pytest subprocess (see _run_one_file)."""
     cmd = [sys.executable, "-m", "pytest", str(file), *pytest_args]
-    
+
+    # Isolate Hermes state before pytest collection starts.  The autouse
+    # fixture in tests/conftest.py installs its own per-test HERMES_HOME, but
+    # collection imports modules first.  Import-heavy modules such as
+    # gateway.run resolve and cache the home at import time, so preserving a
+    # developer's real HOME here can otherwise make later runtime reloads read
+    # ~/.hermes/.env despite the fixture.  Give every file/attempt its own
+    # empty home; the fixture will replace it again once each test begins.
+    hermes_home = tempfile.TemporaryDirectory(prefix="hermes-test-home-")
+    child_env = os.environ.copy()
+    child_env["HERMES_HOME"] = hermes_home.name
+
     subproc_start = time.monotonic()
     # launch the pytest process
     proc = subprocess.Popen(
@@ -315,7 +342,7 @@ def _run_one_file_once(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace",
-        env=os.environ,
+        env=child_env,
         # POSIX: place the child at the head of its own process group so
         # _kill_tree can SIGKILL the group atomically.
         # Windows: this maps to CREATE_NEW_PROCESS_GROUP in CPython 3.12+;
@@ -359,6 +386,8 @@ def _run_one_file_once(
         _kill_tree(proc, pgid=pgid)
 
         output +=  "\n"
+    finally:
+        hermes_home.cleanup()
 
     if rc == 5:
         # No tests collected in THIS file — legitimate per-file: a
@@ -657,8 +686,8 @@ def main() -> int:
         "-j",
         "--jobs",
         type=int,
-        default=int(os.environ.get("HERMES_TEST_WORKERS") or (os.cpu_count() or 4) * 2),
-        help="Parallel worker count (default: $HERMES_TEST_WORKERS or cpu_count*2)",
+        default=_default_worker_count(),
+        help="Parallel worker count (default: $HERMES_TEST_WORKERS or cpu_count)",
     )
     parser.add_argument(
         "--paths",

@@ -299,15 +299,18 @@ def test_fts_read_corruption_detected_by_read_probe(tmp_path):
     assert reason is not None
     assert "messages_fts" in reason
     # Message varies by SQLite build (same variance documented in
-    # SessionDB._is_fts_write_corruption_error): older builds raise the
-    # generic "database disk image is malformed"; newer builds raise the
-    # FTS5-specific 'fts5: corrupt structure record for table "..."'.
-    # Both are the same corruption class.
+    # SessionDB._is_fts_write_corruption_error): builds may raise the generic
+    # "database disk image is malformed", the FTS5-specific
+    # 'fts5: corrupt structure record for table "..."', or (SQLite 3.37)
+    # "vtable constructor failed" after the damaged shadow blocks prevent the
+    # virtual table from opening.  All are the same corruption class; the
+    # companion repair test below proves the index is genuinely rebuilt.
     reason_l = reason.lower()
     assert (
         "malformed" in reason_l
         or "database disk image" in reason_l
         or ("fts5" in reason_l and "corrupt" in reason_l)
+        or "vtable constructor failed" in reason_l
     )
 
 
@@ -555,7 +558,12 @@ def test_repair_rebuilds_stale_btree_indexes(tmp_path):
     # The real detector must see the real corruption...
     reason = hermes_state._db_opens_cleanly(db_path)
     assert reason is not None
-    assert "wrong # of entries in index idx_messages_session" in reason
+    reason_l = reason.lower()
+    assert "idx_messages_session" in reason_l
+    assert (
+        "wrong # of entries in index" in reason_l
+        or "missing from index" in reason_l
+    )
 
     # ...and the real repair ladder must fix it via REINDEX.
     report = repair_state_db_schema(db_path)

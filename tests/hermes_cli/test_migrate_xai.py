@@ -228,23 +228,32 @@ class TestIdempotence:
 # ---------------------------------------------------------------------------
 
 class TestUnreadableExistingConfig:
-    def test_apply_refuses_to_overwrite_unreadable_config(self, trap_config: Path):
+    def test_apply_refuses_to_overwrite_unreadable_config(
+        self, trap_config: Path, monkeypatch
+    ):
         """apply_migration must not clobber an existing config.yaml it can't
         read. It reads the file first (which raises on an unreadable file), and
         the require_readable_config_before_write guard before the write is a
         belt-and-suspenders backstop for the read-then-write window. Either way
         the original bytes must survive."""
-        import os
-
         issues = find_retired_xai_refs(_parse(trap_config))
         assert issues  # sanity: trap_config has retired refs
         original = trap_config.read_bytes()
 
-        os.chmod(trap_config, 0o000)
-        try:
-            with pytest.raises((PermissionError, RuntimeError, OSError)):
-                apply_migration(trap_config, issues, backup=False)
-        finally:
-            os.chmod(trap_config, 0o644)
+        # chmod(000) is still readable by root, which is how containerized CI
+        # and the canonical fork gate often run.  Inject the same OS-level read
+        # failure at the guard instead so the contract is user-independent.
+        import hermes_cli.config as config_module
+
+        real_open = open
+
+        def deny_config_read(path, mode="r", *args, **kwargs):
+            if Path(path) == trap_config and "r" in mode:
+                raise PermissionError("simulated unreadable config")
+            return real_open(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr(config_module, "open", deny_config_read, raising=False)
+        with pytest.raises(RuntimeError, match="cannot be read"):
+            apply_migration(trap_config, issues, backup=False)
 
         assert trap_config.read_bytes() == original
