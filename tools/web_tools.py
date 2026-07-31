@@ -163,11 +163,9 @@ def _load_web_config() -> dict:
 # constant so the whitelist early-returns and the availability chokepoint
 # stay in sync.
 #
-# NOTE: this intentionally includes ``xai``, which the registry's
-# ``_LEGACY_PREFERENCE`` does NOT — xai availability is probed via
-# ``has_xai_credentials()`` (env var OR auth.json OAuth), not a registered
-# WebSearchProvider. Keep the two sets aligned by hand: if xai ever ships as
-# a registered provider, drop it here so the registry path takes over.
+# NOTE: xAI remains in this set for legacy auto-detection behavior, but when
+# the xAI plugin is registered, _is_backend_available() delegates to the
+# provider first so custom chat_completions credentials are honored.
 _LEGACY_WEB_BACKENDS = frozenset(
     {"parallel", "firecrawl", "tavily", "exa", "searxng", "brave-free", "ddgs", "xai"}
 )
@@ -321,10 +319,12 @@ def _is_backend_available(backend: str) -> bool:
     hardcoded probes below.
     """
     backend = (backend or "").lower().strip()
-    if backend not in _LEGACY_WEB_BACKENDS:
-        registered = _registered_web_provider_available(backend)
-        if registered is not None:
-            return registered
+    # Registered providers take precedence over legacy availability probes.
+    # This is required for xAI's custom chat_completions mode, whose
+    # credentials live in custom:* rather than XAI_API_KEY/OAuth.
+    registered = _registered_web_provider_available(backend)
+    if registered is not None:
+        return registered
     if backend == "exa":
         return _has_env("EXA_API_KEY")
     if backend == "parallel":

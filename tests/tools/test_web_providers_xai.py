@@ -28,6 +28,24 @@ def _mock_resp(json_data, status_code: int = 200):
     return m
 
 
+def _sse_resp(chunks, status_code: int = 200):
+    m = MagicMock()
+    m.status_code = status_code
+    m.headers = {"content-type": "text/event-stream; charset=utf-8"}
+    lines = [": heartbeat", ""]
+    for content in chunks:
+        lines.extend([
+            "data: " + json.dumps({
+                "choices": [{"delta": {"content": content}}],
+            }),
+            "",
+        ])
+    lines.extend(["data: [DONE]", ""])
+    m.content = "\n".join(lines).encode()
+    m.raise_for_status = MagicMock()
+    return m
+
+
 def _responses_payload(text: str, annotations=None, citations=None) -> dict:
     """Build a minimal Responses-API reply with one message + output_text block."""
     chunk: dict = {"type": "output_text", "text": text}
@@ -656,6 +674,125 @@ class TestXAIProviderSearchErrors:
 
         assert result["success"] is False
         assert "model overloaded" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# Custom OpenAI-compatible chat-completions mode
+# ---------------------------------------------------------------------------
+
+
+class TestXAICustomChatCompletions:
+    def test_custom_mode_does_not_resolve_official_xai_credentials(self):
+        from plugins.web.xai import provider as xai_provider
+
+        body = {
+            "choices": [{
+                "message": {
+                    "content": (
+                        "Current source: https://www.nature.com/articles/example\n"
+                        "Nature article summary."
+                    )
+                }
+            }]
+        }
+        with patch.object(
+            xai_provider,
+            "_load_xai_web_config",
+            return_value={
+                "mode": "chat_completions",
+                "provider": "custom:grok_self",
+                "model": "grok-4.20-0309-non-reasoning",
+            },
+        ), patch.object(
+            xai_provider,
+            "_resolve_custom_chat_credentials",
+            return_value={
+                "provider": "custom:grok_self",
+                "api_key": "custom-test-key",
+                "base_url": "https://grok.example/v1",
+            },
+        ), patch.object(
+            xai_provider,
+            "resolve_xai_http_credentials",
+            side_effect=AssertionError("custom mode must not use official xAI credentials"),
+        ), patch("httpx.post", return_value=_mock_resp(body)) as posted:
+            result = xai_provider.XAIWebSearchProvider().search("APA", limit=3)
+
+        assert result["success"] is True
+        assert result["data"]["web"][0]["url"] == "https://www.nature.com/articles/example"
+        assert result["data"]["web"][0]["position"] == 1
+        assert posted.call_args.args[0] == "https://grok.example/v1/chat/completions"
+        request = posted.call_args.kwargs["json"]
+        assert request["model"] == "grok-4.20-0309-non-reasoning"
+        assert request["messages"][0]["role"] == "user"
+        assert request["stream"] is False
+
+    def test_custom_mode_parses_json_results(self):
+        from plugins.web.xai import provider as xai_provider
+
+        body = {
+            "choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "results": [{
+                            "title": "Nature",
+                            "url": "https://www.nature.com",
+                            "description": "Research source.",
+                        }]
+                    })
+                }
+            }]
+        }
+        with patch.object(
+            xai_provider,
+            "_load_xai_web_config",
+            return_value={"mode": "chat_completions", "provider": "custom:grok_self"},
+        ), patch.object(
+            xai_provider,
+            "_resolve_custom_chat_credentials",
+            return_value={
+                "provider": "custom:grok_self",
+                "api_key": "custom-test-key",
+                "base_url": "https://grok.example/v1",
+            },
+        ), patch("httpx.post", return_value=_mock_resp(body)):
+            result = xai_provider.XAIWebSearchProvider().search("APA", limit=3)
+
+        assert result["success"] is True
+        assert result["data"]["web"] == [{
+            "title": "Nature",
+            "url": "https://www.nature.com",
+            "description": "Research source.",
+            "position": 1,
+        }]
+
+
+    def test_custom_mode_parses_sse_delta_content(self):
+        from plugins.web.xai import provider as xai_provider
+
+        chunks = [
+            "Source: ",
+            "https://www.nature.com/articles/example",
+            "\nNature source.",
+        ]
+        with patch.object(
+            xai_provider,
+            "_load_xai_web_config",
+            return_value={"mode": "chat_completions", "provider": "custom:grok_self"},
+        ), patch.object(
+            xai_provider,
+            "_resolve_custom_chat_credentials",
+            return_value={
+                "provider": "custom:grok_self",
+                "api_key": "custom-test-key",
+                "base_url": "https://grok.example/v1",
+            },
+        ), patch("httpx.post", return_value=_sse_resp(chunks)):
+            result = xai_provider.XAIWebSearchProvider().search("APA", limit=3)
+
+        assert result["success"] is True
+        assert len(result["data"]["web"]) == 1
+        assert result["data"]["web"][0]["url"] == "https://www.nature.com/articles/example"
 
 
 # ---------------------------------------------------------------------------

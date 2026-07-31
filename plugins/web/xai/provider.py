@@ -19,15 +19,24 @@ Optional knobs (under ``web.xai`` in ``config.yaml``)::
 
     web:
       xai:
-        model: "grok-build-0.1"       # reasoning model required by web_search
+        mode: "responses"          # official xAI Responses web_search
+        model: "grok-build-0.1"    # reasoning model required by web_search
+        provider: "custom:grok_self" # used by chat_completions mode
         allowed_domains: ["x.ai"]     # max 5 — mutually exclusive with excluded_domains
         excluded_domains: ["bad.com"] # max 5 — mutually exclusive with allowed_domains
         timeout: 90                   # seconds (default 90)
 
-Auth: reuses :func:`tools.xai_http.resolve_xai_http_credentials`, which
+``chat_completions`` mode posts to the configured custom provider's
+OpenAI-compatible ``/chat/completions`` endpoint. It is intended for relays
+where the selected Grok model performs current, source-linked retrieval in a
+normal chat response; it does not claim to provide xAI's native
+``web_search_call`` events.
+
+Auth: official ``responses`` mode reuses :func:`tools.xai_http.resolve_xai_http_credentials`, which
 prefers Hermes-managed xAI Grok OAuth (via ``hermes auth``) and falls back
-to ``XAI_API_KEY`` (resolved through ``~/.hermes/.env``, then
-``os.environ``).
+ to ``XAI_API_KEY`` (resolved through ``~/.hermes/.env``, then
+``os.environ``). ``chat_completions`` mode resolves the named ``custom:*``
+credential pool instead.
 """
 
 from __future__ import annotations
@@ -48,12 +57,42 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "grok-build-0.1"
 DEFAULT_TIMEOUT = 90
+DEFAULT_CUSTOM_PROVIDER = "custom:grok_self"
 _MAX_DOMAIN_FILTERS = 5  # xAI hard cap on allowed_domains / excluded_domains
 
 # Match the JSON object Grok is asked to emit. Tolerates leading/trailing
 # prose since reasoning models occasionally narrate before the JSON block
 # even when explicitly asked not to.
 _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}", re.MULTILINE)
+_URL_RE = re.compile(r"https?://[^\s<>\]\)\"']+")
+
+
+def _configured_mode(cfg: Dict[str, Any]) -> str:
+    """Return the configured xAI search mode, defaulting to official xAI."""
+    mode = cfg.get("mode") if isinstance(cfg.get("mode"), str) else "responses"
+    return mode.strip().lower() or "responses"
+
+
+def _resolve_custom_chat_credentials(provider_name: str) -> Dict[str, str]:
+    """Resolve a named OpenAI-compatible custom endpoint from its credential pool."""
+    pool_key = str(provider_name or DEFAULT_CUSTOM_PROVIDER).strip().lower()
+    if not pool_key.startswith("custom:"):
+        pool_key = f"custom:{pool_key}"
+    try:
+        from agent.credential_pool import load_pool
+
+        pool = load_pool(pool_key)
+        entry = pool.select() if pool is not None else None
+        if entry is None:
+            return {"provider": pool_key, "api_key": "", "base_url": ""}
+        return {
+            "provider": pool_key,
+            "api_key": str(entry.runtime_api_key or "").strip(),
+            "base_url": str(entry.runtime_base_url or "").strip().rstrip("/"),
+        }
+    except Exception as exc:  # noqa: BLE001 — provider errors become tool errors
+        logger.warning("Could not resolve custom web-search credentials: %s", exc)
+        return {"provider": pool_key, "api_key": "", "base_url": ""}
 
 
 # ---------------------------------------------------------------------------
@@ -126,15 +165,22 @@ class XAIWebSearchProvider(WebSearchProvider):
         return "xAI Web Search (Grok)"
 
     def is_available(self) -> bool:
-        """Cheap availability probe — env var OR auth-store has OAuth tokens.
+        """Cheap availability probe — env var OR auth-store has OAuth tokens,
+        OR custom provider pool has credentials for chat_completions mode.
 
-        Delegates to :func:`tools.xai_http.has_xai_credentials`, which is
-        deliberately *not* the same as :func:`resolve_xai_http_credentials`:
-        it never triggers OAuth token refresh or acquires the auth-store
-        lock. The ABC contract requires this method to be safe to call on
-        every ``hermes tools`` repaint and at tool-registration time.
-        Token freshness / refresh is handled inside :meth:`search`.
+        Delegates to :func:`tools.xai_http.has_xai_credentials` for the
+        default ``responses`` mode.  In ``chat_completions`` mode, checks
+        the custom credential pool instead.  Must never trigger OAuth refresh
+        or acquire the auth-store lock — the ABC contract requires this
+        method to be safe to call on every ``hermes tools`` repaint and at
+        tool-registration time.
         """
+        cfg = _load_xai_web_config()
+        mode = _configured_mode(cfg)
+        if mode == "chat_completions":
+            provider_name = cfg.get("provider") or DEFAULT_CUSTOM_PROVIDER
+            creds = _resolve_custom_chat_credentials(provider_name)
+            return bool(creds.get("api_key") and creds.get("base_url"))
         return has_xai_credentials()
 
     def supports_search(self) -> bool:
@@ -159,18 +205,6 @@ class XAIWebSearchProvider(WebSearchProvider):
         except Exception:  # noqa: BLE001 — interrupt module is best-effort
             pass
 
-        creds = resolve_xai_http_credentials()
-        api_key = str(creds.get("api_key") or "").strip()
-        base_url = str(creds.get("base_url") or "https://api.x.ai/v1").strip().rstrip("/")
-        if not api_key:
-            return {
-                "success": False,
-                "error": (
-                    "No xAI credentials found. Run `hermes auth` to sign in with "
-                    "xAI Grok OAuth, or set XAI_API_KEY."
-                ),
-            }
-
         # Clamp limit to the same range the caller (web_search_tool) accepts,
         # so we don't silently downgrade explicit limits. Grok happily
         # produces longer lists; cost scales linearly with the requested
@@ -184,6 +218,24 @@ class XAIWebSearchProvider(WebSearchProvider):
         cfg = _load_xai_web_config()
         model = cfg.get("model") if isinstance(cfg.get("model"), str) else DEFAULT_MODEL
         model = model.strip() or DEFAULT_MODEL
+
+        # Route based on configured mode. Custom chat-completions mode must
+        # not require official xAI credentials.
+        mode = _configured_mode(cfg)
+        if mode == "chat_completions":
+            return self._chat_completions_search(query, limit, cfg, model)
+
+        creds = resolve_xai_http_credentials()
+        api_key = str(creds.get("api_key") or "").strip()
+        base_url = str(creds.get("base_url") or "https://api.x.ai/v1").strip().rstrip("/")
+        if not api_key:
+            return {
+                "success": False,
+                "error": (
+                    "No xAI credentials found. Run `hermes auth` to sign in with "
+                    "xAI Grok OAuth, or set XAI_API_KEY."
+                ),
+            }
 
         try:
             timeout = float(cfg.get("timeout", DEFAULT_TIMEOUT))
@@ -336,6 +388,198 @@ class XAIWebSearchProvider(WebSearchProvider):
             return {"success": True, "data": {"web": []}}
 
         return {"success": True, "data": {"web": web_results}}
+
+    def _chat_completions_search(
+        self, query: str, limit: int, cfg: Dict[str, Any], model: str,
+    ) -> Dict[str, Any]:
+        """Search via a custom OpenAI-compatible chat completions endpoint.
+
+        Posts a prompt that asks the model to act as a search engine, then
+        extracts URLs and descriptions from the free-form answer.  This is
+        intended for Grok relays whose model already provides current,
+        encyclopedia-like responses with source links — it does not invoke
+        the native xAI ``web_search`` tool.
+        """
+        provider_name = cfg.get("provider") or DEFAULT_CUSTOM_PROVIDER
+        creds = _resolve_custom_chat_credentials(provider_name)
+        api_key = creds.get("api_key", "")
+        base_url = creds.get("base_url", "")
+        if not api_key or not base_url:
+            return {
+                "success": False,
+                "error": (
+                    f"No credentials found for {provider_name}. "
+                    "Check web.xai.provider in config.yaml."
+                ),
+            }
+
+        try:
+            timeout = float(cfg.get("timeout", DEFAULT_TIMEOUT))
+        except (TypeError, ValueError):
+            timeout = DEFAULT_TIMEOUT
+
+        prompt = (
+            "You are a web search engine. Find current information for the "
+            f"following query and respond with a concise answer that includes "
+            f"relevant source URLs. Return at most {limit} sources, each with "
+            f"a short description. Format: for each source, include the URL "
+            f"and a 1-2 sentence summary of what it says. Always include the "
+            f"full https:// URL. If no usable results exist, say so.\n\n"
+            f"Query: {query}"
+        )
+
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 2048,
+            # Prefer a normal JSON response; some relays ignore this and
+            # force SSE, which _chat_completion_content also supports.
+            "stream": False,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "hermes-agent/1.0",
+        }
+
+        try:
+            import httpx
+        except ImportError:
+            return {
+                "success": False,
+                "error": "httpx is not installed (required for custom web search)",
+            }
+
+        logger.info(
+            "Custom chat-completions web search via %s: '%s' (limit=%d, model=%s, provider=%s)",
+            base_url, query, limit, model, provider_name,
+        )
+
+        try:
+            resp = httpx.post(
+                f"{base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code if exc.response is not None else 0
+            body = ""
+            try:
+                body = exc.response.text[:300] if exc.response is not None else ""
+            except Exception:
+                body = ""
+            logger.warning("Custom web search HTTP %d: %s", status, body)
+            return {
+                "success": False,
+                "error": f"Custom web search returned HTTP {status}: {body}".rstrip(),
+            }
+        except httpx.RequestError as exc:
+            logger.warning("Custom web search request error: %s", exc)
+            return {"success": False, "error": f"Could not reach endpoint: {exc}"}
+
+        content = self._chat_completion_content(resp)
+        if not content:
+            return {"success": True, "data": {"web": []}}
+
+        web_results = self._chat_results_from_text(content, limit=limit)
+        if not web_results:
+            return {"success": True, "data": {"web": []}}
+        return {"success": True, "data": {"web": web_results}}
+
+    @staticmethod
+    def _chat_completion_content(resp: Any) -> str:
+        """Extract assistant text from JSON or forced SSE chat responses."""
+        content_type = str(getattr(resp, "headers", {}).get("content-type", "")).lower()
+        raw = getattr(resp, "content", b"")
+
+        # Normal OpenAI-compatible response: one JSON object.
+        if "text/event-stream" not in content_type:
+            try:
+                data = resp.json()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Custom web search bad JSON: %s", exc)
+                return ""
+            choices = data.get("choices") if isinstance(data, dict) else None
+            if not isinstance(choices, list) or not choices:
+                return ""
+            message = choices[0].get("message") if isinstance(choices[0], dict) else None
+            content = message.get("content") if isinstance(message, dict) else ""
+            return content.strip() if isinstance(content, str) else ""
+
+        # Some relays return SSE regardless of the request's stream flag.
+        # Aggregate delta.content from each data line and ignore heartbeats.
+        if isinstance(raw, bytes):
+            text = raw.decode("utf-8", errors="replace")
+        else:
+            text = str(raw)
+        parts: List[str] = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                chunk = json.loads(payload)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            choices = chunk.get("choices") if isinstance(chunk, dict) else None
+            if not isinstance(choices, list) or not choices:
+                continue
+            delta = choices[0].get("delta") if isinstance(choices[0], dict) else None
+            piece = delta.get("content") if isinstance(delta, dict) else ""
+            if isinstance(piece, str):
+                parts.append(piece)
+        return "".join(parts).strip()
+
+    @staticmethod
+    def _chat_results_from_text(text: str, *, limit: int) -> List[Dict[str, Any]]:
+        """Extract search results from a free-form chat-completions answer.
+
+        Uses two strategies:
+        1. Try to parse a JSON ``results`` array embedded in the text
+           (same as the official Responses path).
+        2. Fall back to extracting all https:// URLs from the text with
+           surrounding context as descriptions.
+        """
+        # Primary: JSON object with a results array
+        parsed = XAIWebSearchProvider._try_parse_json_results(text, limit=limit)
+        if parsed:
+            return parsed
+
+        # Fallback: extract URLs and use surrounding lines as descriptions
+        seen: set[str] = set()
+        results: List[Dict[str, Any]] = []
+        lines = text.splitlines()
+        for idx, line in enumerate(lines):
+            if len(results) >= limit:
+                break
+            urls = _URL_RE.findall(line)
+            for url in urls:
+                url = url.rstrip(".,;:!?\"')]>*")
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                # Use the line itself plus next line as description
+                desc_parts = [line.strip()]
+                if idx + 1 < len(lines):
+                    next_line = lines[idx + 1].strip()
+                    if next_line:
+                        desc_parts.append(next_line)
+                description = " ".join(desc_parts)
+                if len(description) > 300:
+                    description = description[:300] + "…"
+                results.append({
+                    "title": "",
+                    "url": url,
+                    "description": description,
+                    "position": len(results) + 1,
+                })
+        return results
 
     # -- Prompt + parsing -------------------------------------------------
 
