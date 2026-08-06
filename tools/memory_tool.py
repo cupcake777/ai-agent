@@ -437,17 +437,14 @@ class MemoryStore:
         without requiring a session restart.
         """
         try:
-            _cfg_path = Path(get_hermes_home()) / "config.yaml"
-            if _cfg_path.exists():
-                import yaml
-                with open(_cfg_path, "r", encoding="utf-8") as _f:
-                    _cfg = yaml.safe_load(_f) or {}
-                _mem_cfg = _cfg.get("memory", {})
-                if target == "user":
-                    _val = _mem_cfg.get("user_char_limit", self.user_char_limit)
-                else:
-                    _val = _mem_cfg.get("memory_char_limit", self.memory_char_limit)
-                return int(_val)
+            from hermes_cli.config import load_config_readonly
+
+            _mem_cfg = (load_config_readonly() or {}).get("memory", {}) or {}
+            if target == "user":
+                _val = _mem_cfg.get("user_char_limit", self.user_char_limit)
+            else:
+                _val = _mem_cfg.get("memory_char_limit", self.memory_char_limit)
+            return int(_val)
         except Exception:
             pass
         # Fallback to init-time defaults
@@ -842,14 +839,11 @@ class MemoryStore:
         # facts while avoiding huge fixed prompts for trivial chat messages.
         prompt_limit = 0
         try:
-            _cfg_path = Path(get_hermes_home()) / "config.yaml"
-            if _cfg_path.exists():
-                import yaml
-                with open(_cfg_path, "r", encoding="utf-8") as _f:
-                    _cfg = yaml.safe_load(_f) or {}
-                _mem_cfg = _cfg.get("memory", {}) or {}
-                key = "user_prompt_char_limit" if target == "user" else "memory_prompt_char_limit"
-                prompt_limit = int(_mem_cfg.get(key, 0) or 0)
+            from hermes_cli.config import load_config_readonly
+
+            _mem_cfg = (load_config_readonly() or {}).get("memory", {}) or {}
+            key = "user_prompt_char_limit" if target == "user" else "memory_prompt_char_limit"
+            prompt_limit = int(_mem_cfg.get(key, 0) or 0)
         except Exception:
             prompt_limit = 0
 

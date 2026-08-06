@@ -2505,21 +2505,20 @@ class ShellFileOperations(FileOperations):
     def _search_content(self, pattern: str, path: str, file_glob: Optional[str],
                         limit: int, offset: int, output_mode: str, context: int) -> SearchResult:
         """Search for content inside files (grep-like)."""
-        # rg/grep are intentionally invoked in line-oriented mode. Reject a
-        # regex newline before calling either backend: some rg versions make
-        # it a hard parse error, so waiting until after execution makes the
-        # user-facing multiline guidance backend/version dependent (and the
-        # grep fallback may interpret it differently again).
-        if _pattern_has_regex_newline(pattern):
-            return _maybe_warn_line_oriented_newline_pattern(SearchResult(), pattern)
+        wants_multiline = _pattern_has_regex_newline(pattern)
 
-        # Try ripgrep first (fast), fallback to grep (slower but works)
+        # Try ripgrep first (fast), fallback to grep (slower but works).  rg can
+        # safely satisfy newline regexes when _search_with_rg enables
+        # --multiline below; the line-oriented warning is only for the grep
+        # fallback, which cannot match across lines portably.
         used_rg = False
         if self._has_command('rg'):
             used_rg = True
             result = self._search_with_rg(pattern, path, file_glob, limit, offset,
                                           output_mode, context)
         elif self._has_command('grep'):
+            if wants_multiline:
+                return _maybe_warn_line_oriented_newline_pattern(SearchResult(), pattern)
             result = self._search_with_grep(pattern, path, file_glob, limit, offset,
                                             output_mode, context)
         else:
