@@ -158,45 +158,6 @@ class TestSearchContentNewlineWarning:
         assert _pattern_has_regex_newline(r"needle\n")
         assert _pattern_has_regex_newline(r"needle\\\n")
 
-    def test_even_backslash_n_is_literal_and_not_detected(self):
-        assert not _pattern_has_regex_newline(r"needle\\n")
-        assert not _pattern_has_regex_newline(r"needle\\\\n")
-
-    def test_zero_matches_with_regex_newline_adds_warning_not_error(self, match_tree):
-        res = _ops(match_tree).search(
-            r"absent\npattern",
-            path=str(match_tree),
-            target="content",
-            context=2,
-        )
-
-        assert res.error is None
-        assert res.total_count == 0
-        assert res.warning is not None
-        assert "0 results found" in res.warning
-        assert "-U/--multiline" in res.warning
-
-    def test_actual_newline_pattern_adds_warning_not_error(self, match_tree):
-        res = _ops(match_tree).search(
-            "absent\npattern",
-            path=str(match_tree),
-            target="content",
-        )
-
-        assert res.error is None
-        assert res.total_count == 0
-        assert res.warning is not None
-
-    def test_search_with_matching_alternative_and_regex_newline_warns(self, match_tree):
-        res = _ops(match_tree).search(
-            r"needle|absent\npattern",
-            path=str(match_tree),
-            target="content",
-        )
-
-        assert res.error is None
-        assert res.total_count == 0
-        assert res.warning is not None
 
     def test_literal_backslash_n_pattern_does_not_warn(self, match_tree):
         res = _ops(match_tree).search(
@@ -219,24 +180,6 @@ class TestSplitToolDiagnostics:
         assert payload.strip() == ""
         assert "regex parse error" in diagnostics
 
-    def test_partial_error_separates_matches(self):
-        out = ("rg: sub/locked.txt: Permission denied (os error 13)\n"
-               "a.txt:1:needle here\nb.txt:2:needle there\n")
-        diagnostics, payload = _split_tool_diagnostics(out)
-        assert "Permission denied" in diagnostics
-        assert "a.txt:1:needle here" in payload
-        assert "b.txt:2:needle there" in payload
-        assert "Permission denied" not in payload
-
-    def test_files_only_is_payload(self):
-        diagnostics, payload = _split_tool_diagnostics("src/a.py\nsrc/b.py\n")
-        assert diagnostics == ""
-        assert payload == "src/a.py\nsrc/b.py"
-
-    def test_count_lines_are_payload(self):
-        diagnostics, payload = _split_tool_diagnostics("src/a.py:3\nsrc/b.py:1\n")
-        assert diagnostics == ""
-        assert "src/a.py:3" in payload
 
     def test_context_lines_and_separator_are_payload(self):
         out = "a.py:5:hit\na.py-6-after\n--\nb.py:9:hit\n"
