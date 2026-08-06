@@ -1209,29 +1209,47 @@ def group_providers(slugs):
         preserved.
       * Duplicate slugs in the input are ignored after first sight.
     """
+    # Preserve the caller's original slug spelling in returned rows.  User
+    # configured providers can be case-sensitive display/routing keys (e.g.
+    # ``providers.EDU``); lower-casing the emitted slug made Telegram's picker
+    # build ``row['slug'] == 'edu'`` and then fail to look it up in the original
+    # ``by_slug['EDU']`` map, silently hiding the provider.  Normalize only for
+    # duplicate/group comparisons.
+    norm_to_original: dict[str, str] = {}
+    ordered_norms: list[str] = []
+    for slug in slugs:
+        original = str(slug or "").strip()
+        norm = original.lower()
+        if not norm or norm in norm_to_original:
+            continue
+        norm_to_original[norm] = original
+        ordered_norms.append(norm)
+
+    present_norms = set(ordered_norms)
     seen: set[str] = set()
-    # Which present members each group has, in declaration order.
+    # Which present members each group has, in declaration order.  Group member
+    # slugs are canonical lowercase slugs, so returning canonical spelling for
+    # grouped built-ins preserves existing behavior.
     group_members: dict[str, list[str]] = {}
     for gid, (_label, _desc, members) in PROVIDER_GROUPS.items():
-        present = [m for m in members if m in set(slugs)]
+        present = [m for m in members if m.lower() in present_norms]
         if present:
             group_members[gid] = present
 
     rows = []
     emitted_groups: set[str] = set()
-    for slug in slugs:
-        s = str(slug or "").strip().lower()
-        if not s or s in seen:
+    for s in ordered_norms:
+        if s in seen:
             continue
         seen.add(s)
         gid = _SLUG_TO_GROUP.get(s, "")
         if not gid:
-            rows.append({"kind": "single", "slug": s})
+            rows.append({"kind": "single", "slug": norm_to_original[s]})
             continue
         if gid in emitted_groups:
             continue  # already folded at the first member's position
         emitted_groups.add(gid)
-        members = group_members.get(gid, [s])
+        members = group_members.get(gid, [norm_to_original[s]])
         if len(members) <= 1:
             rows.append({"kind": "single", "slug": members[0]})
         else:

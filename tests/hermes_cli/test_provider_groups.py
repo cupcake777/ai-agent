@@ -106,6 +106,11 @@ def test_duplicate_slugs_ignored():
     assert [r.get("slug") or r["group_id"] for r in rows] == ["nous", "minimax"]
 
 
+def test_duplicate_slugs_ignored_case_insensitively_preserves_first_spelling():
+    rows = group_providers(["EDU", "edu", "Pdteam.xyz", "pdteam.xyz"])
+    assert [r["slug"] for r in rows] == ["EDU", "Pdteam.xyz"]
+
+
 def test_fold_is_lossless_for_present_slugs():
     """Every input slug (deduped) must still be reachable through the folded
     rows — grouping hides nothing."""
