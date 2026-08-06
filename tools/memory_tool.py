@@ -436,21 +436,23 @@ class MemoryStore:
         config.yaml are honoured across all platforms (TG, CLI, gateway)
         without requiring a session restart.
         """
+        # Use only explicit user-config overrides here.  The store's instance
+        # defaults may be intentionally smaller than DEFAULT_CONFIG (tests,
+        # approval helpers, profile-scoped callers).  A fully merged
+        # load_config_readonly() would inject DEFAULT_CONFIG and silently
+        # override those caller-provided caps.
         try:
-            from hermes_cli.config import load_config_readonly
+            from hermes_cli.config import read_user_config_raw
 
-            _mem_cfg = (load_config_readonly() or {}).get("memory", {}) or {}
-            if target == "user":
-                _val = _mem_cfg.get("user_char_limit", self.user_char_limit)
-            else:
-                _val = _mem_cfg.get("memory_char_limit", self.memory_char_limit)
-            return int(_val)
+            _mem_cfg = (read_user_config_raw() or {}).get("memory", {}) or {}
+            if isinstance(_mem_cfg, dict):
+                if target == "user" and "user_char_limit" in _mem_cfg:
+                    return int(_mem_cfg["user_char_limit"])
+                if target != "user" and "memory_char_limit" in _mem_cfg:
+                    return int(_mem_cfg["memory_char_limit"])
         except Exception:
             pass
-        # Fallback to init-time defaults
-        if target == "user":
-            return self.user_char_limit
-        return self.memory_char_limit
+        return self.user_char_limit if target == "user" else self.memory_char_limit
 
     def add(self, target: str, content: str) -> Dict[str, Any]:
         """Append a new entry. Returns error if it would exceed the char limit."""
