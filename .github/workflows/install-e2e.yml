@@ -72,6 +72,11 @@ jobs:
           fetch-tags: true
           sparse-checkout: scripts/sandbox/pick-release-tags.sh
           sparse-checkout-cone-mode: false
+      - name: Fetch upstream release tags
+        run: |
+          set -euo pipefail
+          git remote add release-upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch -q --force --tags release-upstream 'refs/tags/v*:refs/tags/v*'
       - id: pick
         run: |
           set -euo pipefail
