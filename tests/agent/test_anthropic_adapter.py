@@ -79,6 +79,17 @@ class TestBuildAnthropicClient:
                 "anthropic-beta": "interleaved-thinking-2025-05-14"
             }
 
+    def test_codewords_anthropic_runtime_uses_bearer_auth(self):
+        """CodeWords' Anthropic-compatible runtime rejects native x-api-key auth."""
+        with patch("agent.anthropic_adapter._anthropic_sdk") as mock_sdk:
+            build_anthropic_client(
+                "codewords-secret-123",
+                base_url="https://runtime.codewords.ai/run/anthropic",
+            )
+            kwargs = mock_sdk.Anthropic.call_args[1]
+            assert kwargs["auth_token"] == "codewords-secret-123"
+            assert "api_key" not in kwargs
+
 
     def test_azure_foundry_anthropic_endpoint_uses_bearer_auth(self):
         """Azure AI Foundry's /anthropic endpoint requires Authorization: Bearer.
