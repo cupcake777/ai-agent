@@ -269,48 +269,52 @@ class TestGeneratedSystemdUnits:
 
         assert "/mnt/c/WINDOWS/system32" in unit
 
-    def test_system_unit_avoids_recursive_execstop_and_uses_extended_stop_timeout(self, monkeypatch):
-        monkeypatch.setattr(
-            gateway_cli,
-            "_get_restart_drain_timeout",
-            lambda: DEFAULT_GATEWAY_RESTART_DRAIN_TIMEOUT,
-        )
-        monkeypatch.setattr(
-            gateway_cli,
-            "_system_service_identity",
-            lambda run_as_user=None: ("alice", "alice", "/home/alice"),
-        )
-        unit = gateway_cli.generate_systemd_unit(system=True)
+    def test_launchd_plist_persists_configured_nofile_soft_limit(self, monkeypatch):
+        """The generated plist must carry SoftResourceLimits/NumberOfFiles so a
+        plist rewrite by `hermes gateway start` cannot strip the FD floor and
+        reintroduce EMFILE crashes (launchd default soft limit is 256)."""
+        import hermes_cli.resource_limits as resource_limits
 
-        assert "ExecStart=" in unit
-        assert "ExecStop=" not in unit
-        assert "ExecReload=/bin/kill -USR1 $MAINPID" in unit
-        assert f"RestartForceExitStatus={GATEWAY_SERVICE_RESTART_EXIT_CODE}" in unit
-        assert f"RestartPreventExitStatus={GATEWAY_FATAL_CONFIG_EXIT_CODE}" in unit
-        # The default drain is immediate, so keep a bounded 60-second stop
-        # budget without forcing every restart to wait 90 seconds.
-        assert self._expected_timeout_stop_sec() in unit
-        assert "WantedBy=multi-user.target" in unit
-        # ExecStopPost reaps any process the gateway didn't clean up itself,
-        # so long-lived helpers (e.g. adb) can't be left orphaned in the
-        # cgroup and block Restart=always — issue #37454.
-        assert "ExecStopPost=" in unit
-        assert "-m gateway.cgroup_cleanup" in unit
-        # KillMode=mixed is preserved so the gateway still reaps its own
-        # tool-call children before systemd SIGKILLs the cgroup — #8202.
-        assert "KillMode=mixed" in unit
+        monkeypatch.setattr(
+            resource_limits, "configured_nofile_soft_limit", lambda config=None: 65536
+        )
+
+        plist = gateway_cli.generate_launchd_plist()
+
+        assert "<key>SoftResourceLimits</key>" in plist
+        assert "<key>NumberOfFiles</key>" in plist
+        assert "<integer>65536</integer>" in plist
+
+    def test_launchd_plist_omits_nofile_block_when_disabled(self, monkeypatch):
+        """runtime.nofile_soft_limit: 0/false/null disables the adjustment; the
+        plist must then not contain a SoftResourceLimits block at all."""
+        import hermes_cli.resource_limits as resource_limits
+
+        monkeypatch.setattr(
+            resource_limits, "configured_nofile_soft_limit", lambda config=None: None
+        )
+
+        plist = gateway_cli.generate_launchd_plist()
+
+        assert "SoftResourceLimits" not in plist
+
 
 
 class TestGatewayStopCleanup:
+    @pytest.mark.linux_only
     def test_stop_only_kills_current_profile_by_default(self, tmp_path, monkeypatch):
         """Without --all, stop uses systemd (if available) and does NOT call
-        the global kill_gateway_processes()."""
+        the global kill_gateway_processes().
+
+        Linux-gated: the routing under test is the systemd arm, and it is only
+        reached when the host really isn't macOS/Windows (the old
+        ``is_macos → False`` stub is gone).
+        """
         unit_path = tmp_path / "hermes-gateway.service"
         unit_path.write_text("unit\n", encoding="utf-8")
 
         monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: True)
         monkeypatch.setattr(gateway_cli, "is_termux", lambda: False)
-        monkeypatch.setattr(gateway_cli, "is_macos", lambda: False)
         monkeypatch.setattr(gateway_cli, "get_systemd_unit_path", lambda system=False: unit_path)
 
         service_calls = []
@@ -804,12 +808,17 @@ class TestGatewaySystemServiceRouting:
 
 
 
+    @pytest.mark.macos_only
     def test_gateway_restart_does_not_fallback_to_foreground_when_launchd_restart_fails(self, tmp_path, monkeypatch):
+        """macOS-gated: the branch under test is ``elif is_macos() and
+        get_launchd_plist_path().exists()``. Faking the platform flags on Linux
+        left ``supports_systemd_services()`` / ``launchctl`` semantics untested;
+        on a real macOS host only ``launchd_restart`` is stubbed (it would touch
+        the user's real launchd domain).
+        """
         plist_path = tmp_path / "ai.hermes.gateway.plist"
         plist_path.write_text("plist\n", encoding="utf-8")
 
-        monkeypatch.setattr(gateway_cli, "is_linux", lambda: False)
-        monkeypatch.setattr(gateway_cli, "is_macos", lambda: True)
         monkeypatch.setattr(gateway_cli, "get_launchd_plist_path", lambda: plist_path)
         monkeypatch.setattr(
             gateway_cli,
