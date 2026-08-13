@@ -17708,6 +17708,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                             _hyg_session_db,
                                             session_entry.session_id,
                                         )
+                                    # AIAgent's compressor is bound above, but the
+                                    # host-level in-place persistence guard reads
+                                    # ``_hyg_agent._session_db`` directly.  Keep both
+                                    # handles aligned.  Without this assignment the
+                                    # hygiene agent summarizes successfully yet sees
+                                    # no durable store at commit time, emits the
+                                    # "no session_db" warning, and leaves the huge
+                                    # Telegram transcript unchanged (#21301).
+                                    _hyg_agent._session_db = _hyg_session_db
+                                    _hyg_agent._session_db_created = True
                                     # It must never finalize on close() — close()
                                     # would end the live gateway session row.
                                     _hyg_agent._end_session_on_close = False
