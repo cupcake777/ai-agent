@@ -779,8 +779,8 @@ async def test_session_hygiene_forces_in_place_compaction_with_bound_session_db(
     assert agent is not None
     async_session_db.get_session.assert_awaited_once_with("sess-1")
     agent.context_compressor.bind_session_state.assert_called_once_with(fake_db, "sess-1")
-    # The durable store must be bound on both the compressor and helper agent:
-    # AIAgent's in-place commit guard reads helper._session_db directly.
+    # The helper must hold the synchronous SessionDB facade; its
+    # archive_and_compact() method performs the atomic in-place rewrite.
     assert agent._session_db is fake_db
     assert agent._session_db_created is True
     # In-place compaction already persisted via archive_and_compact() —

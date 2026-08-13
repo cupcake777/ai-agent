@@ -17697,7 +17697,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                     # bindings.  If no SessionDB is available,
                                     # compress_context leaves this flag false and
                                     # the guard below preserves the transcript.
+                                    _hyg_durable_db = getattr(
+                                        self._session_db, "_db", self._session_db
+                                    )
                                     _hyg_agent.compression_in_place = True
+                                    _hyg_agent._session_db = _hyg_durable_db
+                                    _hyg_agent._session_db_created = True
                                     _bind_hyg_state = getattr(
                                         getattr(_hyg_agent, "context_compressor", None),
                                         "bind_session_state",
@@ -17705,19 +17710,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                     )
                                     if callable(_bind_hyg_state):
                                         _bind_hyg_state(
-                                            _hyg_session_db,
+                                            _hyg_durable_db,
                                             session_entry.session_id,
                                         )
-                                    # AIAgent's compressor is bound above, but the
-                                    # host-level in-place persistence guard reads
-                                    # ``_hyg_agent._session_db`` directly.  Keep both
-                                    # handles aligned.  Without this assignment the
-                                    # hygiene agent summarizes successfully yet sees
-                                    # no durable store at commit time, emits the
-                                    # "no session_db" warning, and leaves the huge
-                                    # Telegram transcript unchanged (#21301).
-                                    _hyg_agent._session_db = _hyg_session_db
-                                    _hyg_agent._session_db_created = True
                                     # It must never finalize on close() — close()
                                     # would end the live gateway session row.
                                     _hyg_agent._end_session_on_close = False
