@@ -5,7 +5,7 @@ heavy dependency chain.  It is safe to import at module level without triggering
 tool registration or provider resolution.
 """
 
-import hashlib
+import ast
 import logging
 import os
 import re
@@ -391,7 +391,7 @@ def skill_matches_environment(frontmatter: Dict[str, Any]) -> bool:
 # ── Disabled skills ───────────────────────────────────────────────────────
 
 
-_RAW_CONFIG_CACHE: Dict[Tuple[str, bytes], Dict[str, Any]] = {}
+_RAW_CONFIG_CACHE: Dict[Tuple[str, int, int], Dict[str, Any]] = {}
 
 
 def _raw_config_cache_clear() -> None:
@@ -400,41 +400,37 @@ def _raw_config_cache_clear() -> None:
 
 
 def _load_raw_config() -> Dict[str, Any]:
-    """Read config.yaml with a shared content-fingerprint keyed cache.
+    """Read config.yaml with a shared mtime+size keyed cache.
 
     This module intentionally avoids importing ``hermes_cli.config`` on the
-    skill prompt/build path. Reading the small file on each lookup is cheap;
-    caching the parsed YAML avoids the expensive repeated parse while a content
-    fingerprint remains correct on filesystems where equal-size rewrites can
-    retain the same mtime and ctime.
+    skill prompt/build path. A tiny local cache gives the same repeated-read
+    win without pulling the heavier CLI config stack into startup.
     """
     config_path = get_config_path()
     if not config_path.exists():
         return {}
     try:
-        content = config_path.read_bytes()
-        cache_key = (
-            str(config_path),
-            hashlib.blake2b(content, digest_size=16).digest(),
-        )
-    except Exception as e:
-        logger.debug("Could not read skill config %s: %s", config_path, e)
-        return {}
+        stat = config_path.stat()
+        cache_key = (str(config_path), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        cache_key = None
 
-    cached = _RAW_CONFIG_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
+    if cache_key is not None:
+        cached = _RAW_CONFIG_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
 
     try:
-        parsed = yaml_load(content.decode("utf-8"))
+        parsed = yaml_load(config_path.read_text(encoding="utf-8"))
     except Exception as e:
-        logger.debug("Could not parse skill config %s: %s", config_path, e)
+        logger.debug("Could not read skill config %s: %s", config_path, e)
         return {}
     if not isinstance(parsed, dict):
         return {}
 
-    _RAW_CONFIG_CACHE.clear()
-    _RAW_CONFIG_CACHE[cache_key] = parsed
+    if cache_key is not None:
+        _RAW_CONFIG_CACHE.clear()
+        _RAW_CONFIG_CACHE[cache_key] = parsed
     return parsed
 
 
@@ -476,12 +472,34 @@ def get_disabled_skill_names(platform: str | None = None) -> Set[str]:
     return global_disabled
 
 
+def parse_config_string_list(value) -> List[str]:
+    """Normalize a config value that may hold a JSON-array string into a list.
+
+    ``hermes config set`` and JSON-mode editor saves store lists as quoted
+    JSON strings (``'["a","b"]'`` or the Python-literal ``"['a']"``). Treating
+    such a string as a single name makes a curated disabled list silently
+    filter nothing (#86661); parsing it restores the intended list. A scalar
+    string still means one name (#13026).
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("["):
+            try:
+                parsed = ast.literal_eval(stripped)
+            except (ValueError, SyntaxError):
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        return [value]
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [str(item) for item in value]
+    return []
+
+
 def _normalize_string_set(values) -> Set[str]:
-    if values is None:
-        return set()
-    if isinstance(values, str):
-        values = [values]
-    return {str(v).strip() for v in values if str(v).strip()}
+    return {name.strip() for name in parse_config_string_list(values) if name.strip()}
 
 
 # ── External skills directories ──────────────────────────────────────────

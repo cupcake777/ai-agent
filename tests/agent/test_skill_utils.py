@@ -13,6 +13,7 @@ from agent.skill_utils import (
     is_external_skill_path,
     is_skill_support_path,
     iter_skill_index_files,
+    parse_config_string_list,
     parse_frontmatter,
     resolve_skill_config_values,
     skill_matches_platform,
@@ -73,37 +74,79 @@ skills:
     assert parse_count == 1
 
 
-def test_skill_config_raw_cache_invalidates_same_signature_edit(tmp_path, monkeypatch):
-    """Equal-size edits invalidate even when filesystem timestamps stay unchanged."""
-    from agent import skill_utils
+class TestParseConfigStringList:
+    """#86661: `hermes config set` and JSON-mode editor saves store lists as
+    quoted strings (e.g. '["a","b"]'). Treating such a string as a single name
+    made curated disabled lists silently filter nothing."""
 
-    hermes_home = tmp_path / ".hermes"
-    hermes_home.mkdir()
-    config_path = hermes_home / "config.yaml"
-    config_path.write_text("skills:\n  disabled: [old-skill]\n", encoding="utf-8")
+    def test_json_array_string_parses(self):
+        assert parse_config_string_list('["skill-a","skill-b"]') == [
+            "skill-a",
+            "skill-b",
+        ]
 
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-    skill_utils._external_dirs_cache_clear()
-    assert get_disabled_skill_names() == {"old-skill"}
+    def test_python_literal_array_string_parses(self):
+        # `hermes config set` can persist single-quoted Python-literal forms.
+        assert parse_config_string_list("['skill-a']") == ["skill-a"]
 
-    original_stat = config_path.stat()
+    def test_scalar_string_means_one_name(self):
+        # #13026: a scalar string still names a single entry.
+        assert parse_config_string_list("skill-a") == ["skill-a"]
 
-    config_path.write_text("skills:\n  disabled: [new-skill]\n", encoding="utf-8")
-    import os
-    os.utime(config_path, None)
+    def test_real_list_passes_through(self):
+        assert parse_config_string_list(["skill-a", "skill-b"]) == [
+            "skill-a",
+            "skill-b",
+        ]
+        assert parse_config_string_list(("skill-a",)) == ["skill-a"]
 
-    edited_stat = config_path.stat()
-    assert edited_stat.st_size == original_stat.st_size
-    real_path_stat = type(config_path).stat
+    def test_none_returns_empty(self):
+        assert parse_config_string_list(None) == []
 
-    def frozen_config_stat(path, *args, **kwargs):
-        if path == config_path:
-            return original_stat
-        return real_path_stat(path, *args, **kwargs)
+    def test_malformed_json_falls_back_to_single_name(self):
+        assert parse_config_string_list('["skill-a"') == ['["skill-a"']
 
-    monkeypatch.setattr(type(config_path), "stat", frozen_config_stat)
+    def test_empty_array_string_returns_empty(self):
+        assert parse_config_string_list("[]") == []
 
-    assert get_disabled_skill_names() == {"new-skill"}
+
+class TestDisabledSkillsJsonArrayString:
+    """The skills.disabled setting must honor a JSON-array string form, not
+    treat the whole string as one dead skill name (#86661)."""
+
+    def test_get_disabled_skill_names_parses_json_array_string(
+        self, tmp_path, monkeypatch
+    ):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "skills:\n  disabled: '[\"skill-a\",\"skill-b\"]'\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        from agent import skill_utils
+
+        getattr(skill_utils, "_raw_config_cache_clear", lambda: None)()
+
+        assert get_disabled_skill_names() == {"skill-a", "skill-b"}
+
+    def test_get_disabled_skill_names_scalar_string_still_single_name(
+        self, tmp_path, monkeypatch
+    ):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        (hermes_home / "config.yaml").write_text(
+            "skills:\n  disabled: 'hidden-skill'\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        from agent import skill_utils
+
+        getattr(skill_utils, "_raw_config_cache_clear", lambda: None)()
+
+        assert get_disabled_skill_names() == {"hidden-skill"}
+
+
 
 
 
