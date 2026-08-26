@@ -318,7 +318,7 @@ class TestMemoryToolDispatcher:
             memory_tool(action="add", target=42, content="via tool", store=store)
         )
         assert result["success"] is False
-        assert "Invalid target" in result["error"]
+        assert "Invalid memory target" in result["error"]
 
     def test_unknown_action(self, store):
         result = json.loads(memory_tool(action="unknown", store=store))
@@ -379,7 +379,7 @@ class TestMemoryToolDispatcher:
             memory_tool(action="replace", old_text="fact A", new_text="fact A refined", store=store)
         )
         assert result["success"] is True
-        assert "fact A refined" in store.memory_entries
+        assert "[P1] fact A refined" in store.memory_entries
         assert "fact A" not in [e for e in store.memory_entries if e == "fact A"]
 
     def test_new_text_alias_for_content_on_add(self, store):

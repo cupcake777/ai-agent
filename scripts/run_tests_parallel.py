@@ -45,9 +45,10 @@ import argparse
 import json
 import os
 import re
-import tempfile
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, Future
@@ -407,6 +408,25 @@ def _run_one_file_once(
     child_env = os.environ.copy()
     child_env["HERMES_HOME"] = hermes_home.name
 
+    # Give this subprocess its own pytest temp root.
+    #
+    # pytest builds its tmp_path root as <temproot>/pytest-of-<user>/. At the
+    # end of a session it walks that directory with cleanup_dead_symlinks().
+    # The walk lists the directory. Then it asks whether the `pytest-current`
+    # symlink resolves. Then it unlinks the symlink.
+    #
+    # Every file shared one root. A second process replaced that symlink
+    # between the question and the unlink. The first process then died with
+    # FileNotFoundError after all of its tests passed.
+    #
+    # The risk grows with the number of processes that finish together. At 8
+    # workers it never occurred. At 144 workers it occurs.
+    #
+    # One root for each subprocess removes the shared directory that the race
+    # needs. The parent deletes the root after the attempt.
+    temproot = tempfile.mkdtemp(prefix="hermes-pytest-tmproot-")
+    child_env["PYTEST_DEBUG_TEMPROOT"] = temproot
+
     subproc_start = time.monotonic()
     # launch the pytest process
     proc = subprocess.Popen(
@@ -459,9 +479,13 @@ def _run_one_file_once(
             # case it left grandchildren behind; already-dead is a no-op.
             _kill_tree(proc, pgid=pgid)
 
-            output +=  "\n"
+            output += "\n"
     finally:
         hermes_home.cleanup()
+        # Delete the temp root for this attempt. Nothing reads it after the
+        # subprocess exits. More than 3000 of them fill the disk of the
+        # runner over one suite.
+        shutil.rmtree(temproot, ignore_errors=True)
 
     if rc == 5:
         # No tests collected in THIS file — legitimate per-file: a
