@@ -820,12 +820,22 @@ class TestFTS5Search:
         db.append_message("s1", role="user", content="after")
 
         statements = []
-        read_conn = db._get_read_conn() or db._conn
-        traced_connections = [db._conn]
-        if read_conn is not db._conn:
-            traced_connections.append(read_conn)
-        for conn in traced_connections:
-            conn.set_trace_callback(statements.append)
+        original_checkout = db._checkout_read_conn
+        traced_connections = []
+
+        def traced_checkout():
+            conn = original_checkout()
+            if conn is not None:
+                conn.set_trace_callback(statements.append)
+                traced_connections.append(conn)
+            return conn
+
+        # The WAL read pool chooses the connection at query time. Instrument
+        # the acquisition seam so this test observes the connection that
+        # actually executes each search, rather than a connection borrowed
+        # before the pool checkout and potentially not reused.
+        db._checkout_read_conn = traced_checkout
+        db._conn.set_trace_callback(statements.append)
 
         def context_query_count():
             normalized = (" ".join(sql.upper().split()) for sql in statements)
@@ -850,7 +860,9 @@ class TestFTS5Search:
             assert default[0]["context"]
             assert context_query_count() == 2
         finally:
-            for conn in traced_connections:
+            db._checkout_read_conn = original_checkout
+            db._conn.set_trace_callback(None)
+            for conn in set(traced_connections):
                 conn.set_trace_callback(None)
 
     def test_sanitize_fts5_query_strips_dangerous_chars(self):
