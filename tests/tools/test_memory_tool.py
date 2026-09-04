@@ -150,6 +150,28 @@ class TestMemoryStoreReplace:
         assert result["success"] is True
         assert any(entry.endswith("Python 3.12 project") for entry in store.memory_entries)
         assert all("Python 3.11 project" not in entry for entry in store.memory_entries)
+    def test_replacement_autoboosts_priority_and_caps_at_p3(self, store):
+        store.add("memory", "stable fact")
+        assert store.replace("memory", "stable", "stable fact v2")["success"]
+        assert store.memory_entries == ["[P1] stable fact v2"]
+        assert store.replace("memory", "fact v2", "stable fact v3")["success"]
+        assert store.memory_entries == ["[P2] stable fact v3"]
+        assert store.replace("memory", "fact v3", "stable fact v4")["success"]
+        assert store.memory_entries == ["[P3] stable fact v4"]
+        assert store.replace("memory", "fact v4", "stable fact v5")["success"]
+        assert store.memory_entries == ["[P3] stable fact v5"]
+
+    def test_render_orders_priority_and_honors_prompt_only_cap(self, monkeypatch):
+        s = MemoryStore(memory_char_limit=5000, user_char_limit=300)
+        entries = ["ordinary-" + "x" * 300, "[P3] iron", "[P1] preferred"]
+        monkeypatch.setattr(
+            "hermes_cli.config.load_config_readonly",
+            lambda: {"memory": {"memory_prompt_char_limit": 100}},
+        )
+        rendered = s._render_block("memory", entries)
+        assert rendered.index("⚠⚠ iron") < rendered.index("▷ preferred")
+        assert "ordinary-" not in rendered
+        assert "Prompt injection truncated: 1 lower-priority entries" in rendered
 
 
     def test_replace_ambiguous_match(self, store):
@@ -342,6 +364,16 @@ class TestMemoryToolDispatcher:
         assert batch["skipped"] is True
         assert store.memory_entries == []
 
+    def test_batch_replace_autoboosts_priority(self, store):
+        store.add("memory", "original fact")
+        result = json.loads(memory_tool(
+            target="memory",
+            operations=[{"action": "replace", "old_text": "original", "content": "revised fact"}],
+            store=store,
+        ))
+        assert result["success"] is True
+        assert store.memory_entries == ["[P1] revised fact"]
+
     def test_replace_requires_old_text(self, store):
         # Missing old_text on a single-op replace is recoverable, not a dead-end:
         # return the current inventory + a retry instruction so the model can
@@ -431,7 +463,7 @@ class TestMemoryBatch:
             store=store,
         ))
         assert result["success"] is True
-        assert "updated entry" in store.memory_entries
+        assert any(entry.endswith("updated entry") for entry in store.memory_entries)
         assert "batched via new_text" in store.memory_entries
         assert "old entry" not in store.memory_entries
 
@@ -751,9 +783,7 @@ class TestBomToleranceInMemoryFiles:
         raw, read_ok = MemoryStore._read_raw_checked(path)
         assert read_ok is True
         assert not raw.startswith("\ufeff")
-        entries, ok = MemoryStore._read_entries_checked(path)
-        assert ok is True
-        assert entries == ["First fact."]
+        assert MemoryStore._read_file(path) == ["First fact."]
 
     def test_bom_file_add_keeps_existing_entry_intact(self, store):
         path = store._path_for("memory")

@@ -20,7 +20,6 @@ from unittest.mock import patch, MagicMock
 import time
 
 from agent.context_compressor import ContextCompressor, _CHARS_PER_TOKEN
-from agent.conversation_compression import _record_request_level_compression_effectiveness
 
 
 # ---------------------------------------------------------------------------
@@ -188,48 +187,6 @@ class TestAntiThrashing:
 
 
 
-    def test_request_level_low_savings_blocks_after_two_passes(self):
-        """Full request pressure, not message-only size, drives anti-thrash.
-
-        A tool-heavy request can look smaller at message level while the full
-        request barely moves once system prompt + tool schemas are included.
-        Two such compactions must stop automatic re-compression.
-        """
-        comp = _make_compressor(config_context_length=128000)
-        comp.threshold_tokens = 64_000
-
-        _record_request_level_compression_effectiveness(
-            comp,
-            before_tokens=80_747,
-            after_tokens=80_692,
-            previous_ineffective_count=0,
-        )
-        assert comp._ineffective_compression_count == 1
-        assert comp.should_compress(80_692)
-
-        _record_request_level_compression_effectiveness(
-            comp,
-            before_tokens=83_971,
-            after_tokens=79_138,
-            previous_ineffective_count=comp._ineffective_compression_count,
-        )
-        assert comp._ineffective_compression_count == 2
-        assert not comp.should_compress(79_138)
-
-    def test_request_level_effective_savings_resets_counter(self):
-        """A useful full-request reduction clears prior anti-thrash state."""
-        comp = _make_compressor(config_context_length=128000)
-        comp._ineffective_compression_count = 2
-
-        _record_request_level_compression_effectiveness(
-            comp,
-            before_tokens=95_682,
-            after_tokens=48_309,
-            previous_ineffective_count=2,
-        )
-
-        assert comp._ineffective_compression_count == 0
-
 
 # ---------------------------------------------------------------------------
 # Test: summary-LLM cooldown guard in should_compress (#11529)
@@ -305,3 +262,52 @@ class TestCodexSparkShortSessionBoundary:
             f"This would cause the silent context wipe described in #48621."
         )
         assert comp.has_content_to_compress(messages) is True
+
+
+class TestPressureRealFloor:
+    """Regression: Cyrillic-heavy sessions under-count in the rough estimate,
+    letting real prompts ride the provider window (64,842→64,995 observed)
+    while the pre-API gate saw sub-threshold pressure."""
+
+    def _compressor(self, last_real, awaiting=False):
+        class _C:
+            last_real_prompt_tokens = last_real
+            awaiting_real_usage_after_compression = awaiting
+        return _C()
+
+    def test_real_floor_lifts_undercounted_rough(self):
+        from agent.conversation_loop import _pressure_with_real_floor
+        assert _pressure_with_real_floor(self._compressor(64_842), 45_000) == 64_842
+
+    def test_rough_wins_when_larger(self):
+        from agent.conversation_loop import _pressure_with_real_floor
+        assert _pressure_with_real_floor(self._compressor(30_000), 45_000) == 45_000
+
+    def test_stale_real_ignored_right_after_compaction(self):
+        from agent.conversation_loop import _pressure_with_real_floor
+        compressor = self._compressor(64_842, awaiting=True)
+        assert _pressure_with_real_floor(compressor, 20_000) == 20_000
+
+    def test_zero_and_missing_real_are_safe(self):
+        from agent.conversation_loop import _pressure_with_real_floor
+        assert _pressure_with_real_floor(self._compressor(0), 10_000) == 10_000
+        assert _pressure_with_real_floor(object(), 10_000) == 10_000
+
+    def test_anchored_pressure_is_never_floored(self):
+        """A valid usage anchor is provider-exact and wins as-is.
+
+        On MoA turns the anchor deliberately uses the pre-fold aggregator
+        usage while ``last_real_prompt_tokens`` holds the folded figure;
+        flooring the anchored value would re-add the advisor fan-out tokens
+        the anchor exists to exclude. Pin the wiring shape: the floor is
+        applied only on the ``else`` (rough fallback) branch.
+        """
+        import inspect
+        from agent import turn_request_assembly
+
+        src = inspect.getsource(turn_request_assembly.assemble_api_request)
+        i = src.index("if _anchored_pressure is not None:")
+        window = src[i : i + 400]
+        assert "request_pressure_tokens = _anchored_pressure" in window
+        assert "else:" in window
+        assert window.index("else:") < window.index("_pressure_with_real_floor(")

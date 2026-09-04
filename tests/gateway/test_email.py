@@ -90,7 +90,7 @@ class TestCheckRequirements(unittest.TestCase):
         "RESEND_API_KEY": "re_test",
     }, clear=False)
     def test_requirements_met_with_resend(self):
-        from gateway.platforms.email import check_email_requirements
+        from plugins.platforms.email.adapter import check_email_requirements
         self.assertTrue(check_email_requirements())
 
     @patch.dict(os.environ, {
@@ -492,7 +492,7 @@ class TestSendMethods(unittest.TestCase):
             "EMAIL_IMAP_HOST": "imap.test.com",
             "RESEND_API_KEY": "re_test",
         }, clear=False):
-            from gateway.platforms.email import EmailAdapter
+            from plugins.platforms.email.adapter import EmailAdapter
             adapter = EmailAdapter(PlatformConfig(enabled=True))
 
         with patch.object(adapter, "_send_via_resend") as resend_mock, \
@@ -640,7 +640,7 @@ class TestConnectDisconnect(unittest.TestCase):
             "EMAIL_IMAP_HOST": "imap.test.com",
             "RESEND_API_KEY": "re_test",
         }, clear=False):
-            from gateway.platforms.email import EmailAdapter
+            from plugins.platforms.email.adapter import EmailAdapter
             adapter = EmailAdapter(PlatformConfig(enabled=True))
 
         mock_imap = MagicMock()

@@ -14,7 +14,8 @@ from unittest.mock import patch
 
 import httpx
 
-from run_agent import AIAgent, _get_proxy_from_env, _get_proxy_for_base_url
+from agent.process_bootstrap import _get_proxy_for_base_url, _get_proxy_from_env
+from run_agent import AIAgent
 
 
 def _make_agent():
@@ -60,7 +61,25 @@ def test_get_proxy_from_env_normalizes_socks_alias(monkeypatch):
     assert _get_proxy_from_env() == "socks5://127.0.0.1:1080/"
 
 
-@patch("run_agent.OpenAI")
+def test_keepalive_client_rewrites_openai_sdk_headers(monkeypatch):
+    from agent.process_bootstrap import build_keepalive_http_client
+
+    for key in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
+        monkeypatch.delenv(key, raising=False)
+    client = build_keepalive_http_client("https://example.com/v1")
+    assert isinstance(client, httpx.Client)
+    request = httpx.Request("POST", "https://example.com/v1/chat/completions", headers={
+        "User-Agent": "OpenAI/Python 2.0", "x-stainless-os": "linux", "X-Test": "ok",
+    })
+    for hook in client._event_hooks["request"]:
+        hook(request)
+    assert request.headers["user-agent"] == "python-httpx/0.28.1"
+    assert "x-stainless-os" not in request.headers
+    assert request.headers["x-test"] == "ok"
+    client.close()
+
+
+@patch("agent.process_bootstrap.OpenAI")
 def test_create_openai_client_routes_via_proxy_when_env_set(mock_openai, monkeypatch):
     """With HTTPS_PROXY set, the custom httpx.Client must mount an HTTPProxy pool.
 
@@ -100,7 +119,7 @@ def test_create_openai_client_routes_via_proxy_when_env_set(mock_openai, monkeyp
     http_client.close()
 
 
-@patch("run_agent.OpenAI")
+@patch("agent.process_bootstrap.OpenAI")
 def test_create_openai_client_no_proxy_when_env_unset(mock_openai, monkeypatch):
     """Without proxy env vars, no HTTPProxy mount should exist and
     no custom socket-options transport should be installed."""
