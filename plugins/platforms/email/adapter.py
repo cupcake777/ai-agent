@@ -23,6 +23,7 @@ import os
 import re
 import smtplib
 import socket
+import json
 
 # Profile-scoped secret reader for multiplexing support (PR #50094)
 from agent.secret_scope import UnscopedSecretError as _UnscopedSecretError
@@ -230,12 +231,15 @@ def check_email_requirements() -> bool:
 
     Treats blank/whitespace-only values as missing so an abandoned setup that
     left empty ``EMAIL_*`` keys in ``.env`` does not enable the platform (#40715).
+    Outbound delivery can use either SMTP (``EMAIL_SMTP_HOST``) or Resend
+    (``RESEND_API_KEY``); inbound IMAP settings are always required.
     """
     addr = _get_secret("EMAIL_ADDRESS", "").strip()
     pwd = _get_secret("EMAIL_PASSWORD", "").strip()
     imap = _get_secret("EMAIL_IMAP_HOST", "").strip()
     smtp = _get_secret("EMAIL_SMTP_HOST", "").strip()
-    return all([addr, pwd, imap, smtp])
+    resend = _get_secret("RESEND_API_KEY", "").strip()
+    return all([addr, pwd, imap]) and bool(smtp or resend)
 
 
 _CHARSET_ALIASES = {
@@ -556,6 +560,7 @@ class EmailAdapter(BasePlatformAdapter):
         self._imap_port = _esecret_int("EMAIL_IMAP_PORT", 993)
         self._smtp_host = (_get_secret("EMAIL_SMTP_HOST", "") or extra.get("smtp_host", "")).strip()
         self._smtp_port = _esecret_int("EMAIL_SMTP_PORT", 587)
+        self._resend_api_key = (_get_secret("RESEND_API_KEY", "") or extra.get("resend_api_key", "")).strip()
         self._poll_interval = _esecret_int("EMAIL_POLL_INTERVAL", 15)
 
         # Skip attachments — configured via config.yaml:
@@ -682,7 +687,7 @@ class EmailAdapter(BasePlatformAdapter):
                 ("EMAIL_IMAP_HOST", self._imap_host),
                 ("EMAIL_SMTP_HOST", self._smtp_host),
             )
-            if not value
+            if not value and not (name == "EMAIL_SMTP_HOST" and self._resend_api_key)
         ]
         if missing:
             message = (
@@ -763,13 +768,18 @@ class EmailAdapter(BasePlatformAdapter):
             return False
 
         try:
-            # Test SMTP connection
-            smtp = self._connect_smtp()
-            try:
-                smtp.login(self._address, self._password)
-            finally:
-                smtp.quit()
-            logger.info("[Email] SMTP connection test passed.")
+            # Test SMTP connection (skipped in Resend outbound mode — no SMTP
+            # credentials configured; the requirements check above also
+            # exempts EMAIL_SMTP_HOST then).
+            if self._resend_api_key:
+                logger.info("[Email] Resend configured; skipping SMTP connection test.")
+            else:
+                smtp = self._connect_smtp()
+                try:
+                    smtp.login(self._address, self._password)
+                finally:
+                    smtp.quit()
+                logger.info("[Email] SMTP connection test passed.")
         except smtplib.SMTPAuthenticationError as e:
             logger.error("[Email] SMTP authentication failed: %s", e)
             # Typed auth failure (535 & friends): bad or revoked credentials
@@ -1161,7 +1171,10 @@ class EmailAdapter(BasePlatformAdapter):
         body: str,
         reply_to_msg_id: Optional[str] = None,
     ) -> str:
-        """Send an email via SMTP. Runs in executor thread."""
+        """Send an email via SMTP or Resend. Runs in executor thread."""
+        if self._resend_api_key:
+            return self._send_via_resend(to_addr, body, reply_to_msg_id)
+
         msg = MIMEMultipart()
         msg["From"] = self._address
         msg["To"] = to_addr
@@ -1197,6 +1210,68 @@ class EmailAdapter(BasePlatformAdapter):
 
         logger.info("[Email] Sent reply to %s (subject: %s)", to_addr, subject)
         return msg_id
+
+    def _send_via_resend(
+        self,
+        to_addr: str,
+        body: str,
+        reply_to_msg_id: Optional[str] = None,
+    ) -> str:
+        """Send a plain-text email through the Resend HTTP API.
+
+        This keeps the receive side on IMAP while allowing outbound delivery
+        without SMTP credentials. It intentionally uses only the standard
+        library so enabling Resend does not add an optional dependency.
+        """
+        from urllib import error as urllib_error
+        from urllib import request as urllib_request
+
+        ctx = self._thread_context.get(to_addr, {})
+        subject = ctx.get("subject", "Hermes Agent")
+        if not subject.startswith("Re:"):
+            subject = f"Re: {subject}"
+
+        original_msg_id = reply_to_msg_id or ctx.get("message_id")
+        headers: Dict[str, str] = {}
+        if original_msg_id:
+            headers["In-Reply-To"] = original_msg_id
+            headers["References"] = original_msg_id
+
+        payload: Dict[str, Any] = {
+            "from": self._address,
+            "to": [to_addr],
+            "subject": subject,
+            "text": body,
+        }
+        if headers:
+            payload["headers"] = headers
+
+        api_url = os.getenv("RESEND_API_URL", "https://api.resend.com/emails").strip()
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib_request.Request(
+            api_url,
+            data=data,
+            headers={
+                "Authorization": f"Bearer {self._resend_api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib_request.urlopen(req, timeout=SMTP_CONNECT_TIMEOUT) as resp:
+                raw = resp.read().decode("utf-8")
+        except urllib_error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Resend API failed with HTTP {e.code}: {detail}") from e
+
+        try:
+            parsed = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            parsed = {}
+        message_id = str(parsed.get("id") or f"resend-{uuid.uuid4().hex[:12]}")
+        logger.info("[Email] Sent reply to %s via Resend (subject: %s)", to_addr, subject)
+        return message_id
 
     async def send_typing(self, chat_id: str, metadata: Optional[Dict[str, Any]] = None) -> None:
         """Email has no typing indicator — no-op."""
