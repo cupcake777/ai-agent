@@ -126,6 +126,24 @@ class TestPrunedSkillReloadNotice:
         assert notice.count("skill_view(name='alpha')") == 1
         assert notice.index("alpha") < notice.index("beta")
 
+    def test_ignores_documentation_placeholders(self):
+        rows = [
+            {"role": "assistant", "content": "[SKILL_PRUNED: content lost; reload with skill_view(name='...')]"},
+            {"role": "assistant", "content": "[SKILL_PRUNED: content lost; reload with skill_view(name='{skill_name}')]"},
+            {"role": "assistant", "content": "[SKILL_PRUNED: content lost; reload with skill_view(name='real-skill')]"},
+        ]
+        notice = _pruned_skill_reload_notice(rows)
+        assert "skill_view(name='real-skill')" in notice
+        assert "skill_view(name='...')" not in notice
+        assert "skill_view(name='{skill_name}')" not in notice
+
+    def test_forbids_repeated_reload_after_one_attempt(self):
+        notice = _pruned_skill_reload_notice(
+            [{"role": "assistant", "content": _skill_pruned_marker("alpha")}]
+        )
+        assert "at most once per skill" in notice
+        assert "do not call skill_view for it again" in notice
+
     def test_empty_when_nothing_pruned(self):
         rows = [
             {"role": "user", "content": "[CONTEXT COMPACTION] summary"},

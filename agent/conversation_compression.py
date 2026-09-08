@@ -2025,10 +2025,16 @@ def _pruned_skill_reload_notice(compressed: list) -> str:
     capped at ``_MAX_PRUNED_SKILL_MARKERS``."""
     from agent.context_compressor import _MAX_PRUNED_SKILL_MARKERS, _extract_pruned_skill_names
     names: list = []
+    ignored_placeholders = {"...", "{skill_name}", "skill_name"}
     for message in compressed:
         if not isinstance(message, dict):
             continue
         for name in _extract_pruned_skill_names(_message_text(message)):
+            # Compaction summaries and system guidance may quote the documented
+            # placeholder call itself.  It is not an installed skill and must
+            # never become executable reload guidance.
+            if name.strip() in ignored_placeholders or "{" in name or "}" in name:
+                continue
             if name not in names:
                 names.append(name)
     del names[_MAX_PRUNED_SKILL_MARKERS:]
@@ -2039,9 +2045,12 @@ def _pruned_skill_reload_notice(compressed: list) -> str:
         f"{_PRUNED_SKILL_RELOAD_NOTICE_HEADER}\n"
         "The task list above crossed the compression boundary verbatim, but "
         "the skill instructions that governed it were pruned. Before "
-        f"executing any preserved task that depends on these skills, reload "
-        f"them first: {calls}. After reloading, re-check that each pending "
-        "task is still justified — findings recorded before the boundary may have invalidated it."
+        f"executing a preserved task that depends on one of these skills, reload it: {calls}. "
+        "Reload each required skill at most once per skill in this turn. If that call is itself "
+        "marked `[SKILL_PRUNED]`, the reload attempt is complete: do not call skill_view for it again; "
+        "ignore remaining markers for that skill and continue with another strategy. After reloading, "
+        "re-check that each pending task is still justified — findings recorded before the boundary "
+        "may have invalidated it."
     )
 
 
