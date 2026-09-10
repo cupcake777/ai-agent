@@ -12,8 +12,10 @@ Covers:
 9. Message dispatch and threading
 """
 
+import json
 import os
 import unittest
+from pathlib import Path
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -287,7 +289,7 @@ class TestDispatchMessage(unittest.TestCase):
     def test_image_attachment_sets_photo_type(self):
         """Email with image attachment should set message type to PHOTO."""
         import asyncio
-        from gateway.platforms.base import MessageType
+        from gateway.platforms.event import MessageType
         adapter = self._make_adapter()
         captured_events = []
 
@@ -502,6 +504,98 @@ class TestSendMethods(unittest.TestCase):
         self.assertTrue(result.success)
         resend_mock.assert_called_once()
         smtp_mock.assert_not_called()
+
+    def test_resend_rejects_non_https_endpoint_before_sending_key(self):
+        """A misconfigured endpoint must not receive the Resend bearer token."""
+        from gateway.config import PlatformConfig
+
+        with patch.dict(os.environ, {
+            "EMAIL_ADDRESS": "hermes@test.com",
+            "EMAIL_PASSWORD": "secret",
+            "EMAIL_IMAP_HOST": "imap.test.com",
+            "RESEND_API_KEY": "re_test",
+            "RESEND_API_URL": "http://attacker.test/emails",
+        }, clear=False):
+            from plugins.platforms.email.adapter import EmailAdapter
+            adapter = EmailAdapter(PlatformConfig(enabled=True))
+            with patch("urllib.request.urlopen") as urlopen:
+                with self.assertRaisesRegex(ValueError, "HTTPS URL"):
+                    adapter._send_via_resend("user@test.com", "Hello")
+        urlopen.assert_not_called()
+
+    def test_resend_rejects_untrusted_host_before_sending_key(self):
+        """Only the official Resend API host may receive RESEND_API_KEY."""
+        from gateway.config import PlatformConfig
+
+        with patch.dict(os.environ, {
+            "EMAIL_ADDRESS": "hermes@test.com",
+            "EMAIL_PASSWORD": "secret",
+            "EMAIL_IMAP_HOST": "imap.test.com",
+            "RESEND_API_KEY": "re_test",
+            "RESEND_API_URL": "https://attacker.test/emails",
+        }, clear=False):
+            from plugins.platforms.email.adapter import EmailAdapter
+            adapter = EmailAdapter(PlatformConfig(enabled=True))
+            with patch("urllib.request.urlopen") as urlopen:
+                with self.assertRaisesRegex(ValueError, "api.resend.com"):
+                    adapter._send_via_resend("user@test.com", "Hello")
+        urlopen.assert_not_called()
+
+    def test_resend_attachment_uses_api_not_smtp(self):
+        """Resend-only mode must not fall through to an absent SMTP service."""
+        from gateway.config import PlatformConfig
+
+        with patch.dict(os.environ, {
+            "EMAIL_ADDRESS": "hermes@test.com",
+            "EMAIL_PASSWORD": "secret",
+            "EMAIL_IMAP_HOST": "imap.test.com",
+            "RESEND_API_KEY": "re_test",
+        }, clear=False):
+            from plugins.platforms.email.adapter import EmailAdapter
+            adapter = EmailAdapter(PlatformConfig(enabled=True))
+
+        with patch.object(adapter, "_send_via_resend", return_value="resend-1") as resend_mock, \
+             patch.object(adapter, "_smtp_send") as smtp_mock:
+            result = adapter._send_with_files(
+                "user@test.com", "Attached", [(Path(__file__), "test_email.py")], lenient=False,
+            )
+
+        self.assertEqual(result, "resend-1")
+        payload_files = resend_mock.call_args.kwargs["files"]
+        self.assertEqual(payload_files, [(Path(__file__), "test_email.py")])
+        smtp_mock.assert_not_called()
+
+    def test_resend_default_endpoint_encodes_attachment_content(self):
+        """The trusted default endpoint should carry attachment bytes as base64."""
+        from gateway.config import PlatformConfig
+
+        with patch.dict(os.environ, {
+            "EMAIL_ADDRESS": "hermes@test.com",
+            "EMAIL_PASSWORD": "secret",
+            "EMAIL_IMAP_HOST": "imap.test.com",
+            "RESEND_API_KEY": "re_test",
+        }, clear=False):
+            os.environ.pop("RESEND_API_URL", None)
+            from plugins.platforms.email.adapter import EmailAdapter
+            adapter = EmailAdapter(PlatformConfig(enabled=True))
+
+        response = MagicMock()
+        response.read.return_value = b'{"id":"resend-2"}'
+        response.__enter__.return_value = response
+        with patch.object(Path, "read_bytes", return_value=b"attachment bytes"), \
+             patch("urllib.request.urlopen", return_value=response) as urlopen:
+            message_id = adapter._send_via_resend(
+                "user@test.com", "Attached", files=[(Path("report.txt"), "report.txt")],
+            )
+
+        self.assertEqual(message_id, "resend-2")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "https://api.resend.com/emails")
+        payload = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(
+            payload["attachments"],
+            [{"filename": "report.txt", "content": "YXR0YWNobWVudCBieXRlcw=="}],
+        )
 
     def test_send_image_includes_url(self):
         """send_image should include image URL in email body."""
@@ -1124,6 +1218,7 @@ class TestImapIdExtensionForNetEase(unittest.TestCase):
         adapter = self._make_adapter()
 
         mock_imap = MagicMock()
+        mock_imap.capabilities = ("IMAP4REV1", "ID", "UIDPLUS")
         mock_imap.uid.return_value = ("OK", [b""])
 
         with patch("imaplib.IMAP4_SSL", return_value=mock_imap), \
