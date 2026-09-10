@@ -1870,6 +1870,38 @@ class TestAuxiliaryFallbackLayering:
         # Main agent fallback should NOT be needed when chain succeeds
         mock_main.assert_not_called()
 
+    def test_explicit_provider_503_triggers_configured_fallback(self):
+        """An exhausted explicit auxiliary provider must fail over after its 5xx retries."""
+        primary_client = MagicMock()
+        overloaded = Exception(
+            "auth_unavailable: last upstream error: system_cpu_overloaded"
+        )
+        overloaded.status_code = 503
+        primary_client.chat.completions.create.side_effect = overloaded
+
+        fallback_client = MagicMock()
+        fallback_client.chat.completions.create.return_value = MagicMock(choices=[
+            MagicMock(message=MagicMock(content="compressed by fallback"))
+        ])
+
+        with patch("agent.auxiliary_client._get_cached_client",
+                   return_value=(primary_client, "gemini-3.8-flash-high")), \
+             patch("agent.auxiliary_client._resolve_task_provider_model",
+                   return_value=("cpa", "gemini-3.8-flash-high", None, None, None)), \
+             patch("agent.auxiliary_client._try_configured_fallback_chain",
+                   return_value=(fallback_client, "deepseek-v4-flash", "fallback_chain[0](sensenova)")) as mock_chain, \
+             patch("agent.auxiliary_client._try_main_agent_model_fallback") as mock_main, \
+             patch("agent.auxiliary_client.time.sleep"):
+            result = call_llm(
+                task="compression",
+                messages=[{"role": "user", "content": "summarize"}],
+            )
+
+        mock_chain.assert_called()
+        assert fallback_client.chat.completions.create.called
+        assert result.choices[0].message.content == "compressed by fallback"
+        mock_main.assert_not_called()
+
 
     def test_warning_emitted_when_all_fallbacks_exhausted(self, monkeypatch, caplog):
         """When chain AND main model both fail, a user-visible warning fires before re-raise."""
