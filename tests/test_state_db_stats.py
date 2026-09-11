@@ -196,13 +196,14 @@ def test_render_healthy_stats_no_warnings():
     assert "2" in joined  # holders
 
 
-def test_render_warns_on_large_db():
+def test_render_warns_on_large_db_when_auto_prune_is_disabled():
     from hermes_cli.doctor_state import STATE_DB_SIZE_WARN_BYTES, _render_state_db_stats
 
     big = STATE_DB_SIZE_WARN_BYTES + 1
     lines = _render_state_db_stats(
         _base_stats(logical_size_bytes=big, page_count=big // 4096, page_size=4096),
         holders=None,
+        auto_prune_enabled=False,
     )
     warns = [t for k, t, *rest in lines if k == "warn"] + [
         " ".join(rest) for k, t, *rest in lines if k == "warn"
@@ -210,6 +211,44 @@ def test_render_warns_on_large_db():
     blob = " ".join(str(x) for x in warns)
     assert "auto_prune" in blob
     assert "config.yaml" in blob
+
+
+def test_render_large_db_with_auto_prune_enabled_suggests_retention_tuning():
+    from hermes_cli.doctor_state import STATE_DB_SIZE_WARN_BYTES, _render_state_db_stats
+
+    lines = _render_state_db_stats(
+        _base_stats(logical_size_bytes=STATE_DB_SIZE_WARN_BYTES + 1),
+        holders=None,
+        auto_prune_enabled=True,
+    )
+    blob = " ".join(" ".join(str(p) for p in line) for line in lines)
+    assert "state.db is large" in blob
+    assert "retention_days" in blob
+    assert "enabling sessions.auto_prune" not in blob
+
+
+def test_state_db_health_skips_heavy_probe_while_database_is_in_use(tmp_path, capsys):
+    """Doctor must not hold a long read transaction against a live gateway DB."""
+    if not sys.platform.startswith("linux"):
+        pytest.skip("live-holder detection uses Linux /proc")
+
+    from hermes_cli.doctor_report import Finding
+
+    db_path = tmp_path / "state.db"
+    live_db = SessionDB(db_path=db_path)
+    try:
+        live_db.create_session("live-session", "gateway")
+        holders = count_db_holders(db_path)
+        assert holders is not None and holders >= 1
+
+        finding = Finding()
+        hermes_cli.doctor_state._state_db_health(finding, False, db_path, "~/.hermes")
+
+        output = capsys.readouterr().out.lower()
+        assert "skipped full integrity/write probe while state.db is in use" in output
+        assert finding.issues == []
+    finally:
+        live_db.close()
 
 
 def test_render_large_db_with_pending_rebuild_suggests_optimize():
