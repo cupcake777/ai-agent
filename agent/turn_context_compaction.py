@@ -62,6 +62,13 @@ def _reset_retry_state_after_compaction(agent: Any) -> None:
     agent._last_content_with_tools = None
     agent._last_content_tools_all_housekeeping = False
     agent._mute_post_response = False
+    # Compression can remove the prior result that made a repeated read look
+    # redundant.  Reset only context-sensitive loop evidence; this is still the
+    # same user turn, so failure history and per-turn tool caps must survive.
+    _guardrails = getattr(agent, "_tool_guardrails", None)
+    _reset_guardrails = getattr(_guardrails, "reset_after_compaction", None)
+    if callable(_reset_guardrails):
+        _reset_guardrails()
 
 
 def _blocked_compress_reason(

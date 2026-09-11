@@ -8,6 +8,7 @@ from agent.turn_context_compaction import (
     CompactionOutcome,
     _codex_native_auto_compaction,
     _rearm_uncompressed_overflow_warn,
+    _reset_retry_state_after_compaction,
     run_turn_start_compaction,
 )
 
@@ -78,3 +79,19 @@ def test_preflight_gate_skips_small_transcripts():
     est.assert_not_called()
     agent.context_compressor.should_compress.assert_not_called()
     assert out.messages is msgs
+
+
+def test_compaction_boundary_resets_tool_guardrail_reload_state():
+    guardrails = MagicMock()
+    agent = SimpleNamespace(
+        _empty_content_retries=2,
+        _thinking_prefill_retries=2,
+        _last_content_with_tools="stale",
+        _last_content_tools_all_housekeeping=True,
+        _mute_post_response=True,
+        _tool_guardrails=guardrails,
+    )
+
+    _reset_retry_state_after_compaction(agent)
+
+    guardrails.reset_after_compaction.assert_called_once_with()

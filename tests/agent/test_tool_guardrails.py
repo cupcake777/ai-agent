@@ -244,8 +244,65 @@ def test_identical_call_streak_never_halts_when_hard_stop_disabled_or_for_poller
     assert hard.halt_decision is None
 
 
+def test_reset_after_compaction_clears_idempotent_reload_state_but_preserves_turn_caps():
+    controller = ToolCallGuardrailController(
+        ToolCallGuardrailConfig(
+            hard_stop_enabled=True,
+            exact_failure_block_after=1,
+            no_progress_warn_after=2,
+            no_progress_block_after=2,
+            loop_caps=LoopCapConfig(max_web_searches=1),
+        )
+    )
+    args = {"name": "test-driven-development"}
+    result = '{"success": true, "content": "same skill"}'
+
+    assert controller.before_call("skill_view", args).action == "allow"
+    controller.after_call("skill_view", args, result, failed=False)
+    controller.observe_call("skill_view", args, result, tool_call_id="skill-1")
+    assert controller.before_call("skill_view", args).action == "allow"
+    controller.after_call("skill_view", args, result, failed=False)
+    controller.observe_call("skill_view", args, result, tool_call_id="skill-2")
+    blocked = controller.before_call("skill_view", args)
+    assert blocked.code == "idempotent_no_progress_block"
+
+    failed_args = {"command": "false"}
+    controller.after_call("terminal", failed_args, "failed", failed=True)
+
+    assert controller.before_call("web_search", {"query": "used before compaction"}).action == "allow"
+    controller.reset_after_compaction()
+
+    # Compression can prune the prior skill result, so a required reload starts
+    # a new idempotent/stall window rather than inheriting the stale block.
+    assert controller.halt_decision is None
+    assert controller.before_call("skill_view", args).action == "allow"
+    observation = controller.observe_call("skill_view", args, result, tool_call_id="skill-3")
+    assert observation.stub is None
+
+    failure = controller.before_call("terminal", failed_args)
+    assert failure.code == "repeated_exact_failure_block"
+
+    # Compression is not a new user turn: per-turn search/delegation caps remain spent.
+    cap = controller.before_call("web_search", {"query": "after compaction"})
+    assert cap.code == "loop_web_search_cap"
 
 
+def test_reset_after_compaction_preserves_a_real_non_idempotent_loop_halt():
+    controller = ToolCallGuardrailController(
+        ToolCallGuardrailConfig(hard_stop_enabled=True, no_progress_block_after=3)
+    )
+    args = {"command": "hermes config get memory.provider"}
+
+    for _ in range(3):
+        controller.observe_call("terminal", args, "local\n", failed=False)
+
+    halt = controller.halt_decision
+    assert halt is not None
+    assert halt.code == "identical_call_streak_halt"
+
+    controller.reset_after_compaction()
+
+    assert controller.halt_decision is halt
 
 
 # ── Per-turn runaway-loop caps (Claude Code v2.1.212, Week 29) ──────────────

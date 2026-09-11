@@ -303,6 +303,26 @@ class ToolCallGuardrailController:
         self._turn_web_search_count = 0
         self._turn_subagent_count = 0
 
+    def reset_after_compaction(self) -> None:
+        """Reset loop state whose evidence may have been pruned by compression.
+
+        A compaction boundary is progress, but it is not a new user turn.  A
+        required read/skill reload must not inherit an idempotent no-progress
+        streak from content that is no longer in the model context.  Keep real
+        failure history and per-turn web-search/delegation caps intact.
+        """
+        self._no_progress.clear()
+        self._identical_streak_sig = None
+        self._identical_streak_result_hash = ""
+        self._identical_streak_count = 0
+        self._identical_streak_first_call_id = ""
+        self._persisted_result_paths.clear()
+        if (
+            self._halt_decision is not None
+            and self._halt_decision.code == "idempotent_no_progress_block"
+        ):
+            self._halt_decision = None
+
     @property
     def halt_decision(self) -> ToolGuardrailDecision | None:
         return self._halt_decision
