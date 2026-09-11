@@ -29,6 +29,7 @@ EXPECTED_FIELDS = {
     "reasoning_mandatory_retry_attempted",
     "oauth_1m_beta_retry_attempted",
     "llama_cpp_grammar_retry_attempted",
+    "content_exists_risk_memory_retry_attempted",
     "primary_recovery_attempted",
     "has_retried_429",
     "auth_failover_attempted",

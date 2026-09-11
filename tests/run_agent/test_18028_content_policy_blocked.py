@@ -21,6 +21,34 @@ class TestContentPolicyBlockedClassification:
     recovery (fallback activation, final_response wording) fires correctly.
     """
 
+    def test_deepseek_content_exists_risk_is_policy_block(self):
+        """DeepSeek hosted API returns HTTP 400 ``Content Exists Risk`` for a
+        serving-side input scan. Must not land in retryable ``format_error``."""
+        from agent.error_classifier import classify_api_error, FailoverReason
+
+        class _Err(Exception):
+            def __init__(self, msg, status_code):
+                super().__init__(msg)
+                self.status_code = status_code
+                self.body = {
+                    "error": {
+                        "message": "Content Exists Risk",
+                        "type": "invalid_request_error",
+                        "param": None,
+                        "code": "invalid_request_error",
+                    }
+                }
+
+        e = _Err(
+            "Error code: 400 - {'error': {'message': 'Content Exists Risk', "
+            "'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}",
+            status_code=400,
+        )
+        result = classify_api_error(e, provider="deepseek", model="deepseek-v4-flash")
+        assert result.reason == FailoverReason.content_policy_blocked
+        assert result.retryable is False
+        assert result.should_fallback is True
+
     def test_openai_codex_cybersecurity_no_status(self):
         """The reported #18028 case — SDK raises without a status code."""
         from agent.error_classifier import classify_api_error, FailoverReason

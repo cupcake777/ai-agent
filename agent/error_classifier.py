@@ -282,6 +282,8 @@ _CONTENT_POLICY_BLOCKED_PATTERNS = (
     "violates our usage policies", "violates openai's usage policies", "your request was flagged by",
     "prompt was flagged by our safety", "responses cannot be generated due to safety",
     "content_filter", "responsibleaipolicyviolation", "new_sensitive",
+    # DeepSeek hosted API: serving-side input scan, HTTP 400, no completion.
+    "content exists risk",
 )
 
 # Auth patterns (non-status-code signals).

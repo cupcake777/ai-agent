@@ -34,6 +34,8 @@ class TurnRetryState:
     reasoning_mandatory_retry_attempted: bool = False
     oauth_1m_beta_retry_attempted: bool = False
     llama_cpp_grammar_retry_attempted: bool = False
+    # DeepSeek ``Content Exists Risk`` 400: omit L1 MEMORY.md from this attempt and retry once.
+    content_exists_risk_memory_retry_attempted: bool = False
 
     # Transport / rate-limit recovery
     primary_recovery_attempted: bool = False
