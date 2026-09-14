@@ -180,6 +180,19 @@ class TestCreateJobSnapshot:
         assert job["provider"] is None
         assert job["provider_snapshot"] == "openrouter"
 
+    def test_named_custom_provider_snapshot_preserves_requested_identity(self, monkeypatch):
+        """Keep the requested named custom provider, not the generic runtime class."""
+        jobs = self._isolate_storage(monkeypatch)
+
+        with patch(
+            "hermes_cli.runtime_provider.resolve_runtime_provider",
+            return_value={"provider": "custom", "requested_provider": "custom:edu"},
+        ):
+            job = jobs.create_job(prompt="do a thing", schedule="every 1 hour")
+
+        assert job["provider"] is None
+        assert job["provider_snapshot"] == "custom:edu"
+
     def test_pinned_job_skips_snapshot(self, monkeypatch):
         jobs = self._isolate_storage(monkeypatch)
 

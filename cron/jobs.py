@@ -1622,7 +1622,16 @@ def _compute_provider_model_snapshots(
             if normalized_base_url:
                 runtime_kwargs["explicit_base_url"] = normalized_base_url
             snap = resolve_runtime_provider(**runtime_kwargs)
-            provider_snapshot = str(snap.get("provider") or "").strip().lower() or None
+            # Named custom providers normalize to the generic runtime class ``custom``. Preserve
+            # the requested identity in the creation snapshot; otherwise a later cron run asks
+            # for bare ``custom`` and may select an unrelated legacy endpoint/credential.
+            resolved_provider = str(snap.get("provider") or "").strip().lower()
+            requested_provider = str(snap.get("requested_provider") or "").strip().lower()
+            provider_snapshot = (
+                requested_provider
+                if resolved_provider == "custom" and requested_provider.startswith("custom:")
+                else resolved_provider
+            ) or None
     if normalized_model is None:
         with contextlib.suppress(Exception):
             model_snapshot = _resolve_default_model_snapshot() or None
