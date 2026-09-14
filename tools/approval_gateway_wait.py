@@ -139,6 +139,9 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
 
     entry = _ApprovalEntry(approval_data)
     payload["request_id"] = entry.data["request_id"]
+    # Keep the legacy hook alias for the installed approval bridge while the
+    # canonical gateway payload uses ``request_id``.
+    payload["approval_id"] = entry.data["request_id"]
     with _approval._lock:
         _approval._gateway_queues.setdefault(session_key, []).append(entry)
 
