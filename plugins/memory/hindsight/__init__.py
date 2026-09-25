@@ -1109,7 +1109,11 @@ class HindsightMemoryProvider(MemoryProvider):
                                          occurred_at=args.get("occurred_at"))
         logger.debug("Tool hindsight_retain: bank=%s, content_len=%d, context=%s",
                      self._bank_id, len(content), context)
-        self._retain_batch(item, bank_id=self._bank_id)
+        # Explicit tool calls are foreground actions: require the server to finish
+        # extraction and return a durable success before telling the model it worked.
+        # Auto-retain remains async via _make_turn_retain_job, so ordinary replies
+        # stay non-blocking.
+        self._retain_batch(item, bank_id=self._bank_id, retain_async=False)
         logger.debug("Tool hindsight_retain: success")
         return "Memory stored successfully."
 
