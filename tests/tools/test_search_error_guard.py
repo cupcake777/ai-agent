@@ -81,6 +81,11 @@ def _search_with_partial_error(ops, method, pattern, path, **kw):
 
     def exec_with_diagnostic(command, *args, **kwargs):
         result = real_exec(command, *args, **kwargs)
+        # The current rg backend resolves the executable through the same
+        # transport before running the search. Do not turn that availability
+        # probe into the synthetic search error this helper is modelling.
+        if "command -v rg" in command or " --version" in command:
+            return result
         result.stdout = (
             f"{tool}: sub/locked.txt: Permission denied (os error 13)\n"
             + result.stdout

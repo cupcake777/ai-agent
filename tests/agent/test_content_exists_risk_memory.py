@@ -64,7 +64,7 @@ class _Agent:
     log_prefix = ""
     _memory_store = None
 
-    def _vprint(self, line, force=False):
+    def _vprint(self, line, force=False, diagnostic=False):
         self.last = line
 
 

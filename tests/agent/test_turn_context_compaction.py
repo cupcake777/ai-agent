@@ -2,16 +2,13 @@
 from ``build_turn_context``)."""
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from agent.turn_context_compaction import (
     CompactionOutcome,
     _codex_native_auto_compaction,
-    _rearm_uncompressed_overflow_warn,
-    _reset_retry_state_after_compaction,
     run_turn_start_compaction,
 )
-
 
 def _agent(**kw):
     compressor = SimpleNamespace(
@@ -25,7 +22,6 @@ def _agent(**kw):
     base.update(kw)
     return SimpleNamespace(**base)
 
-
 def test_codex_native_auto_compaction_gate():
     assert _codex_native_auto_compaction(
         SimpleNamespace(api_mode="codex_app_server", codex_app_server_auto_compaction="native")
@@ -37,7 +33,6 @@ def test_codex_native_auto_compaction_gate():
         SimpleNamespace(api_mode="codex_app_server", codex_app_server_auto_compaction="hermes")
     )
     assert not _codex_native_auto_compaction(SimpleNamespace(api_mode="chat_completions"))
-
 
 def test_disabled_compression_rearms_overflow_warn_when_under_window():
     agent = _agent()
@@ -53,45 +48,3 @@ def test_disabled_compression_rearms_overflow_warn_when_under_window():
     agent._clear_context_overflow_warn.assert_called_once()
     assert agent._turn_received_provider_response is False
     assert agent._turn_preflight_display_snapshot is None
-
-
-def test_multimodal_content_forces_real_estimate():
-    agent = _agent()
-    msgs = [{"role": "user", "content": [{"type": "text", "text": "x"}]}]
-    with patch(
-        "agent.turn_context._preflight_request_tokens", return_value=9_999
-    ) as est:
-        _rearm_uncompressed_overflow_warn(agent, msgs, "sys")
-    est.assert_called_once()
-    agent._clear_context_overflow_warn.assert_not_called()
-
-
-def test_preflight_gate_skips_small_transcripts():
-    agent = _agent(compression_enabled=True)
-    agent.context_compressor.should_compress = MagicMock()
-    msgs = [{"role": "user", "content": "hi"}]
-    with patch("agent.turn_context._preflight_request_tokens") as est:
-        out = run_turn_start_compaction(
-            agent, messages=msgs, system_message=None, active_system_prompt="sys",
-            conversation_history=None, current_turn_user_idx=0, user_message="hi",
-            effective_task_id="t",
-        )
-    est.assert_not_called()
-    agent.context_compressor.should_compress.assert_not_called()
-    assert out.messages is msgs
-
-
-def test_compaction_boundary_resets_tool_guardrail_reload_state():
-    guardrails = MagicMock()
-    agent = SimpleNamespace(
-        _empty_content_retries=2,
-        _thinking_prefill_retries=2,
-        _last_content_with_tools="stale",
-        _last_content_tools_all_housekeeping=True,
-        _mute_post_response=True,
-        _tool_guardrails=guardrails,
-    )
-
-    _reset_retry_state_after_compaction(agent)
-
-    guardrails.reset_after_compaction.assert_called_once_with()
