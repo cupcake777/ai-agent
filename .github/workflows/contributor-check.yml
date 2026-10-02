@@ -24,7 +24,7 @@ jobs:
       - name: Check for unmapped contributor emails
         id: check-emails
         env:
-          BASE_REF: ${{ github.base_ref }}
+          BASE_REF: ${{ github.base_ref || github.event.repository.default_branch }}
         run: |
           # Compare against the actual PR base branch. Forks need not have an
           # origin/main ref (this fork's default branch is my/main).

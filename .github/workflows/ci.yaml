@@ -219,7 +219,9 @@ jobs:
   docs-site:
     name: Docs Site
     needs: detect
-    if: needs.detect.outputs.site == 'true'
+    # The server-only fork intentionally prunes website/. Keep the reusable
+    # workflow in sync with upstream, but do not invoke it in fork CI.
+    if: ${{ false }}
     uses: ./.github/workflows/docs-site-checks.yml
 
   history-check:
@@ -258,6 +260,8 @@ jobs:
   icons-freshness-check:
     name: Icon assets freshness
     needs: detect
+    # The generator includes website assets, which this fork does not ship.
+    if: ${{ false }}
     uses: ./.github/workflows/icons-freshness-check.yml
 
   case-collision-check:
