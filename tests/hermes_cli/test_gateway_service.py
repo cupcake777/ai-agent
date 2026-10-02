@@ -205,6 +205,10 @@ class TestServiceIdentityForForeignHome:
         home = tmp_path / "home"
         home.mkdir()
         monkeypatch.setattr(Path, "home", lambda: home)
+        # The user unit dir follows the ACCOUNT home (#98699), which is read from the environment.
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.delenv("HERMES_REAL_HOME", raising=False)
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
         return home
 
     def test_foreign_home_gets_its_own_unit(self, machine_home, tmp_path, monkeypatch):
@@ -1398,9 +1402,10 @@ def _seed_pm_node_facts(hermes_root):
 class TestSystemUnitHermesHome:
     """HERMES_HOME in system units must reference the target user, not root."""
 
-    def test_no_pm_node_facts_uses_only_ambient_fallback(
+    def test_no_pm_node_never_bakes_the_invokers_path_node(
         self, monkeypatch, tmp_path
     ):
+        """Hermes runs only its PM-managed Node: a PATH node is never written into a unit."""
         (tmp_path / ".hermes" / "tools").mkdir(parents=True)
         monkeypatch.setattr(
             gateway_cli.shutil, "which", lambda name: "/opt/external-node/bin/node"
@@ -1409,12 +1414,12 @@ class TestSystemUnitHermesHome:
 
         gateway_cli._append_node_dir_for_service(entries, tmp_path / ".hermes")
 
-        assert entries == ["/opt/external-node/bin"]
+        assert entries == []
 
-    def test_stale_pm_facts_without_dirs_use_only_ambient_fallback(
+    def test_stale_pm_facts_without_dirs_contribute_nothing(
         self, monkeypatch, tmp_path
     ):
-        """Recorded entries whose store dirs are gone contribute nothing."""
+        """Recorded entries whose store dirs are gone contribute nothing, and no PATH node replaces them."""
         import shutil as _shutil
 
         hermes_root = tmp_path / ".hermes"
@@ -1427,7 +1432,7 @@ class TestSystemUnitHermesHome:
 
         gateway_cli._append_node_dir_for_service(entries, hermes_root)
 
-        assert entries == ["/opt/external-node/bin"]
+        assert entries == []
 
     def test_managed_node_makes_system_unit_independent_of_callers_path(
         self, monkeypatch, tmp_path
@@ -1460,19 +1465,6 @@ class TestSystemUnitHermesHome:
         for managed_dir in managed_dirs:
             assert managed_dir in root_unit
         assert "/root/bin" not in root_unit
-
-    def test_node_path_lookup_remains_fallback_without_managed_node(
-        self, monkeypatch, tmp_path
-    ):
-        """External Node installs still work when pm has no node installed."""
-        monkeypatch.setattr(
-            gateway_cli.shutil, "which", lambda name: "/opt/external-node/bin/node"
-        )
-        entries: list[str] = []
-
-        gateway_cli._append_node_dir_for_service(entries, tmp_path / ".hermes")
-
-        assert entries == ["/opt/external-node/bin"]
 
     def test_system_unit_orders_after_target_user_manager(self, monkeypatch, tmp_path):
         """#104893: restart-safe workers need user@<uid>.service; the system unit must not race it at boot."""
@@ -1854,6 +1846,33 @@ class TestProfileArg:
         assert returncode == 23
         assert int(stdout_log.read_text()) == wrapper.pid
         assert stderr_log.read_text() == ""
+
+    @pytest.mark.platforms("macos")
+    def test_launchd_command_path_timestamps_gateway_stdout(self, tmp_path):
+        """gateway.log is also the logging handler's file: a raw print() through the plist's
+        osascript + stderr_timestamp chain must arrive stamped or ``--since`` cannot filter it."""
+        stdout_log = tmp_path / "gateway.log"
+        stderr_log = tmp_path / "gateway.error.log"
+        command = [
+            sys.executable, "-m", "hermes_cli.stderr_timestamp", "--error-log", str(stderr_log), "--",
+            sys.executable, "-c", "print('[whatsapp] Bridge started on port 3000')",
+        ]
+
+        wrapper = subprocess.Popen(
+            launchd_program_arguments(command, stdout_log, stderr_log), start_new_session=True
+        )
+        try:
+            returncode = wrapper.wait(timeout=30)
+        finally:
+            if wrapper.poll() is None:
+                os.killpg(wrapper.pid, signal.SIGKILL)
+                wrapper.wait()
+
+        assert returncode == 0
+        assert re.fullmatch(
+            r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} \[whatsapp\] Bridge started on port 3000\n",
+            stdout_log.read_text(encoding="utf-8"),
+        )
 
     def test_launchd_plist_path_uses_real_user_home_not_profile_home(self, tmp_path, monkeypatch):
         profile_dir = tmp_path / ".hermes" / "profiles" / "orcha"

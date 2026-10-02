@@ -184,6 +184,7 @@ _HERMES_BEHAVIORAL_VARS = frozenset({
     # Fork single-owner routing can collapse otherwise independent synthetic
     # users. Tests opt in explicitly when exercising that mode.
     "UNIFIED_DM_SESSION",
+    "HERMES_NEMO_RELAY_PLUGINS_TOML",
     # Kanban path/board pins must never leak from a developer shell or
     # dispatched worker into tests; otherwise tests can write fake tasks to
     # the real ~/.hermes/kanban.db instead of the per-test HERMES_HOME.
