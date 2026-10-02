@@ -189,13 +189,10 @@ jobs:
     # single job in the workflow — while still running the full pytest lanes.
     #
     # Re-disabled (Sep 2026): the Sep 1 re-enable is still incredibly flaky.
-    # Keep this a bare `if: false`. The earlier
-    # `${{ false && (... || ...) }}` form on this reusable-workflow job made
-    # GitHub's workflow parser fail at startup ("An unexpected error has
-    # occurred") — every ci.yaml run repo-wide dispatched 0 jobs from
-    # 24f5a60ed1 until this line changed. To re-enable, restore:
-    #   if: ${{ needs.detect.outputs.python_prod == 'true' || needs.detect.outputs.frontend == 'true' }}
-    if: false
+    # Keep disabled unless explicitly enabled as a repository variable. A
+    # constant-false expression on a reusable-workflow job previously caused
+    # opaque parser failures and is also rejected by actionlint.
+    if: ${{ vars.ENABLE_DESKTOP_E2E == 'true' && (needs.detect.outputs.python_prod == 'true' || needs.detect.outputs.frontend == 'true') }}
     uses: ./.github/workflows/e2e-desktop.yml
 
   e2e-desktop-core:
@@ -221,7 +218,7 @@ jobs:
     needs: detect
     # The server-only fork intentionally prunes website/. Keep the reusable
     # workflow in sync with upstream, but do not invoke it in fork CI.
-    if: ${{ false }}
+    if: ${{ needs.detect.outputs.site == 'true' && github.repository != 'cupcake777/ai-agent' }}
     uses: ./.github/workflows/docs-site-checks.yml
 
   history-check:
@@ -261,7 +258,7 @@ jobs:
     name: Icon assets freshness
     needs: detect
     # The generator includes website assets, which this fork does not ship.
-    if: ${{ false }}
+    if: ${{ needs.detect.outputs.site == 'true' && github.repository != 'cupcake777/ai-agent' }}
     uses: ./.github/workflows/icons-freshness-check.yml
 
   case-collision-check:
@@ -314,8 +311,9 @@ jobs:
   #   Non-release (PR/push): failure fails, skipped counts as success.
   #   Release (inputs.release): strict — every required job must be
   #   `success`. A skipped required lane fails the gate; only the PR-only
-  #   jobs (history-check, lockfile-diff, supply-chain, review-labels) and
-  #   the deferred Desktop E2E (e2e-desktop) may skip. The OSV scan's
+  #   jobs (history-check, lockfile-diff, supply-chain, review-labels),
+  #   the deferred Desktop E2E (e2e-desktop), and fork-pruned website lanes
+  #   (docs-site, icons-freshness-check) may skip. The OSV scan's
   #   findings are advisory, but its execution is required.
   #
   # Branch protection should require ONLY this check.

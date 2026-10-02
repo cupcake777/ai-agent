@@ -22,6 +22,10 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GENERATOR = REPO_ROOT / "website" / "scripts" / "generate-llms-txt.py"
+pytestmark = pytest.mark.skipif(
+    not GENERATOR.is_file(),
+    reason="website generator is intentionally pruned from the server-only fork",
+)
 
 @pytest.fixture(scope="module")
 def gen():

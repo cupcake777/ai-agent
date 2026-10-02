@@ -15,6 +15,7 @@ def test_shell_runner_executes_tests_and_propagates_failure(tmp_path):
         "from pathlib import Path\nimport os\n"
         "def test_canary():\n"
         f"    Path({str(marker)!r}).write_text('executed')\n"
+        "    print('runner canary executed')\n"
         "    assert os.environ['PATHEXT'] == '.COM;.EXE;.BAT;.CMD'\n"
         "    assert False, 'runner failure propagation canary'\n",
         encoding="utf-8",
@@ -26,6 +27,11 @@ def test_shell_runner_executes_tests_and_propagates_failure(tmp_path):
         env={**os.environ, "HERMES_PYTHON": sys.executable, "HERMES_TEST_FILE_RETRIES": "0",
              "PATHEXT": ".COM;.EXE;.BAT;.CMD"},
     )
-    assert marker.read_text(encoding="utf-8") == "executed", result.stdout + result.stderr
     assert result.returncode != 0, result.stdout + result.stderr
     assert "runner failure propagation canary" in result.stdout + result.stderr
+    # The parallel runner gives each file a private TMPDIR and deletes it after
+    # pytest exits. tmp_path lives there when this test itself runs through that
+    # runner, so the child proves execution via captured output, not a file the
+    # parent intentionally removes.
+    assert "KeyError: 'PATHEXT'" not in result.stdout + result.stderr
+    assert marker.exists() or "runner canary executed" in result.stdout + result.stderr

@@ -25,6 +25,11 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+pytestmark = pytest.mark.skipif(
+    not (REPO_ROOT / "website" / "scripts" / "generate-skill-docs.py").is_file(),
+    reason="generated website catalogs are intentionally pruned from the server-only fork",
+)
+
 CATALOGS = {
     "skills": REPO_ROOT / "website" / "docs" / "reference" / "skills-catalog.md",
     "optional-skills": REPO_ROOT / "website" / "docs" / "reference" / "optional-skills-catalog.md",

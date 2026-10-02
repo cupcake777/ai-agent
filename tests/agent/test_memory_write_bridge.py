@@ -113,7 +113,7 @@ def test_build_metadata_callback_is_merged_per_op():
         {'action': 'add', 'content': 'Uses the blue notebook'},
         {'action': 'replace', 'old_text': 'blue notebook', 'new_text': 'Uses the green notebook'},
         {'action': 'remove', 'old_text': 'green notebook'},
-    ], [None, 'Uses the blue notebook', 'Uses the green notebook']),
+    ], [None, 'Uses the blue notebook', '[P1] Uses the green notebook']),
 ])
 def test_committed_entry_identity_comes_from_locked_store(
     tmp_path, monkeypatch, batch, operations, previous

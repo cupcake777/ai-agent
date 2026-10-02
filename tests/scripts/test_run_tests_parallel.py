@@ -55,6 +55,10 @@ def isolated_probe_environment(monkeypatch):
     # Probe files exercise pytest/runner mechanics, not installed third-party
     # plugins. Autoloading the developer environment changes their startup cost.
     monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    # This file recursively launches the runner against tiny probe suites. A
+    # parent CI shard selects this test file; it must not also slice the nested
+    # probes (where, for example, slice 3/4 of one file is empty).
+    monkeypatch.delenv("HERMES_TEST_SLICE", raising=False)
 
 
 def _probe_root(tmp_path):
