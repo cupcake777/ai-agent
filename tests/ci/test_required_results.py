@@ -20,6 +20,7 @@ import pytest
 
 
 @pytest.mark.parametrize("release", [False, True])
+@pytest.mark.parametrize("server_fork", [False, True])
 @pytest.mark.parametrize(
     "job",
     ["tests", "osv-scanner", "history-check", "e2e-desktop", "docs-site", "icons-freshness-check"],
@@ -29,11 +30,18 @@ import pytest
     ("cancelled", False, False), ("with-status", False, False),
     ("action_required", False, False), ("unknown", False, False), (None, False, False),
 ])
-def test_status_policy(job, result, ordinary, excluded, release):
-    expected = excluded if job in required_results.EXCLUDED_JOBS else ordinary
+def test_status_policy(job, result, ordinary, excluded, release, server_fork):
+    excluded_jobs = required_results.EXCLUDED_JOBS
+    if server_fork:
+        excluded_jobs |= required_results.FORK_NOT_APPLICABLE_JOBS
+    expected = excluded if job in excluded_jobs else ordinary
     if result == "skipped" and not release:
         expected = True
-    verdict = evaluate_gate({job: {} if result is None else {"result": result}}, release=release)
+    verdict = evaluate_gate(
+        {job: {} if result is None else {"result": result}},
+        release=release,
+        server_fork=server_fork,
+    )
     assert verdict == {"ok": expected, "failed": [] if expected else [job],
                        "allowed_skips": [job] if expected and result == "skipped" else []}
 
@@ -41,8 +49,15 @@ def test_status_policy(job, result, ordinary, excluded, release):
 def test_release_exclusion_policy():
     assert required_results.EXCLUDED_JOBS == {
         "history-check", "lockfile-diff", "supply-chain", "review-labels", "e2e-desktop",
-        "docs-site", "icons-freshness-check",
     }
+    assert required_results.FORK_NOT_APPLICABLE_JOBS == {"docs-site", "icons-freshness-check"}
+
+
+@pytest.mark.parametrize("job", ["docs-site", "icons-freshness-check"])
+def test_website_skip_is_only_allowed_in_server_fork(job):
+    needs = {job: {"result": "skipped"}}
+    assert not evaluate_gate(needs, release=True, server_fork=False)["ok"]
+    assert evaluate_gate(needs, release=True, server_fork=True)["ok"]
 
 
 @pytest.mark.parametrize("needs", [{}, None])
@@ -56,6 +71,7 @@ def test_empty_needs_fails_closed(needs, release):
 
 @pytest.mark.parametrize("release,results,code,report", [
     (True, {"detect": "success", "e2e-desktop": "skipped"}, 0, "All checks passed"),
+    (True, {"docs-site": "skipped"}, 1, "::error::1 job(s) failed: docs-site"),
     (True, {"tests": "skipped", "history-check": "skipped", "lint": "failure"},
      1, "::error::2 job(s) failed: lint, tests"),
     (False, {"tests": "failure"}, 1, "::error::1 job(s) failed: tests"),

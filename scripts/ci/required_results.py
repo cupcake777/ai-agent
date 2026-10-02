@@ -5,8 +5,9 @@ Behavior tests: tests/ci/test_required_results.py
 
 Input: the JSON ``toJSON(needs)`` of the all-checks-pass job on stdin.
 Any non-``success`` result fails the gate. ``skipped`` additionally fails in
-release mode unless the job is in :data:`EXCLUDED_JOBS` (PR-only jobs,
-deferred Desktop E2E, or fork capabilities intentionally not shipped). The
+release mode unless the job is in :data:`EXCLUDED_JOBS` (PR-only jobs or
+deferred Desktop E2E), or ``--server-fork`` explicitly enables fork-only
+exclusions. The
 OSV scan is advisory in its findings only — its execution is required.
 
     echo "$NEEDS" | python3 scripts/ci/required_results.py [--release]
@@ -25,8 +26,8 @@ from typing import Any
 # a strict run tolerates.
 PR_ONLY_JOBS = ("history-check", "lockfile-diff", "supply-chain", "review-labels")
 DEFERRED_JOBS = ("e2e-desktop",)
-FORK_NOT_APPLICABLE_JOBS = ("docs-site", "icons-freshness-check")
-EXCLUDED_JOBS = frozenset((*PR_ONLY_JOBS, *DEFERRED_JOBS, *FORK_NOT_APPLICABLE_JOBS))
+FORK_NOT_APPLICABLE_JOBS = frozenset(("docs-site", "icons-freshness-check"))
+EXCLUDED_JOBS = frozenset((*PR_ONLY_JOBS, *DEFERRED_JOBS))
 
 NEEDS_JSON_OUTPUT = "needs-json"
 
@@ -34,6 +35,7 @@ NEEDS_JSON_OUTPUT = "needs-json"
 def evaluate_gate(
     needs: dict[str, dict[str, Any]] | None,
     release: bool = False,
+    server_fork: bool = False,
 ) -> dict[str, Any]:
     """Verdict for a ``needs`` context; see the module docstring.
 
@@ -45,11 +47,12 @@ def evaluate_gate(
     entries = needs or {}
     if not entries:
         failed.append("<no-needs>")
+    excluded_jobs = EXCLUDED_JOBS | (FORK_NOT_APPLICABLE_JOBS if server_fork else frozenset())
     for name, info in entries.items():
         result = (info or {}).get("result")
         if result == "success":
             continue
-        if result == "skipped" and (not release or name in EXCLUDED_JOBS):
+        if result == "skipped" and (not release or name in excluded_jobs):
             allowed_skips.append(name)
             continue
         failed.append(name)
@@ -85,10 +88,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Strict mode: a skipped excluded job is the only tolerated skip.",
     )
+    parser.add_argument(
+        "--server-fork",
+        action="store_true",
+        help="Allow skips for capabilities intentionally pruned from the server-only fork.",
+    )
     args = parser.parse_args(argv)
 
     needs = json.load(sys.stdin)
-    verdict = evaluate_gate(needs, release=args.release)
+    verdict = evaluate_gate(needs, release=args.release, server_fork=args.server_fork)
     compact = compact_results(needs)
 
     output_file = os.environ.get("GITHUB_OUTPUT")

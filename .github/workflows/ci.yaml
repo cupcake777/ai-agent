@@ -372,9 +372,11 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           RELEASE: ${{ inputs.release }}
+          SERVER_FORK: ${{ github.repository == 'cupcake777/ai-agent' }}
         run: |
           args=()
           if [ "$RELEASE" = true ]; then args+=(--release); fi
+          if [ "$SERVER_FORK" = true ]; then args+=(--server-fork); fi
           printf '%s' "$NEEDS" | python3 scripts/ci/required_results.py "${args[@]}"
 
   # ─────────────────────────────────────────────────────────────────────
