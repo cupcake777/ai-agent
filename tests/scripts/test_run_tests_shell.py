@@ -24,7 +24,8 @@ def test_shell_runner_executes_tests_and_propagates_failure(tmp_path):
     result = subprocess.run(
         ["bash", str(root / "scripts/run_tests.sh"), "-j", "1", str(case)],
         cwd=tmp_path, capture_output=True, text=True, timeout=180,
-        env={**os.environ, "HERMES_PYTHON": sys.executable, "HERMES_TEST_FILE_RETRIES": "0",
+        env={**{key: value for key, value in os.environ.items() if key != "HERMES_TEST_SLICE"},
+             "HERMES_PYTHON": sys.executable, "HERMES_TEST_FILE_RETRIES": "0",
              "PATHEXT": ".COM;.EXE;.BAT;.CMD"},
     )
     assert result.returncode != 0, result.stdout + result.stderr

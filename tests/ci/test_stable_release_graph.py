@@ -142,7 +142,14 @@ def test_all_applicable_ci_jobs_are_aggregated_and_desktop_e2e_stays_deferred():
     jobs = workflow("ci.yaml")["jobs"]
     checks = {name for name, job in jobs.items() if "uses" in job}
     assert checks <= set(jobs["all-checks-pass"]["needs"])
-    assert not gate(jobs["e2e-desktop"]["if"], {}, {})
+    desktop_e2e_if = jobs["e2e-desktop"]["if"]
+    assert not gate(desktop_e2e_if, {}, {})
+    assert gate(
+        desktop_e2e_if,
+        {},
+        {"detect": {"result": "success", "outputs": {"python_prod": "true", "frontend": "false"}}},
+        vars={"ENABLE_DESKTOP_E2E": "true"},
+    )
     assert "workflow_call" in workflow("ci.yaml")["on"]
 
 
