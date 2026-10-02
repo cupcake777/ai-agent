@@ -176,10 +176,30 @@ def test_failed_setup_never_runs_child_and_releases_handles(tmp_path, monkeypatc
         children.append(proc)
         # CREATE_SUSPENDED applies to the initial thread. psutil's Windows
         # process status mapping can still report RUNNING before that thread
-        # resumes. The marker below is the behavioral contract: user code has
-        # not executed.
+        # resumes, so inspect the kernel suspend count without changing the
+        # final state: add one suspension, then remove exactly that one.
         assert not marker.exists()
-        # Query the actual kernel object, not implementation source/constants.
+        threads = psutil.Process(proc.pid).threads()
+        assert threads
+        kernel32 = getattr(ctypes, 'WinDLL')('kernel32', use_last_error=True)
+        kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenThread.restype = wintypes.HANDLE
+        kernel32.SuspendThread.argtypes = [wintypes.HANDLE]
+        kernel32.SuspendThread.restype = wintypes.DWORD
+        kernel32.ResumeThread.argtypes = [wintypes.HANDLE]
+        kernel32.ResumeThread.restype = wintypes.DWORD
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        thread = kernel32.OpenThread(0x0002, False, threads[0].id)  # THREAD_SUSPEND_RESUME
+        assert thread
+        try:
+            previous_count = kernel32.SuspendThread(thread)
+            assert previous_count != 0xFFFFFFFF
+            assert previous_count >= 1
+            assert kernel32.ResumeThread(thread) == previous_count + 1
+        finally:
+            assert kernel32.CloseHandle(thread)
+        # Query the actual job kernel object, not implementation source/constants.
         limits = processes._ExtendedLimits()
         query = job._api.QueryInformationJobObject
         query.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
