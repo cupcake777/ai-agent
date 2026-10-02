@@ -27,9 +27,14 @@ concurrency:
 
 jobs:
   test:
-    name: Run tests
+    name: Run tests (${{ matrix.slice }}/4)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        slice: [1, 2, 3, 4]
     steps:
       - name: Checkout code
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
@@ -91,7 +96,10 @@ jobs:
         run: |
           scripts/run_tests.sh
         env:
-          HERMES_TEST_WORKERS: 32
+          # A standard runner has 4 vCPUs; each shard keeps one CPU available
+          # for subprocess-heavy tests and runner overhead.
+          HERMES_TEST_WORKERS: "3"
+          HERMES_TEST_SLICE: "${{ matrix.slice }}/4"
           HERMES_TEST_FILE_TIMEOUT: 600
           # Ensure tests don't accidentally call real APIs
           OPENROUTER_API_KEY: ""
@@ -105,7 +113,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: test_durations.json
-          key: test-durations-${{ github.run_id }}
+          key: test-durations-${{ github.run_id }}-${{ matrix.slice }}
 
   e2e:
     # The core suites spawn real serve / gateway / tui_gateway / MCP / SQLite

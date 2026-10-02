@@ -78,6 +78,7 @@ jobs:
           - name: Windows-only tests
             runner: windows-latest
             marker: windows
+            timeout: 60
           - name: Windows-only tests (arm64)
             runner: windows-11-arm
             marker: windows
@@ -174,7 +175,7 @@ jobs:
         env:
           # These files spawn nested PowerShell trees. CPU-count parallelism
           # starves cold child startup before the fixture's idle deadline.
-          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && (runner.arch == 'ARM64' && '16' || '16') || '' }}
+          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && (runner.arch == 'ARM64' && '2' || '8') || '' }}
           # Belt-and-suspenders with tests/conftest.py's env blanking: no
           # test may reach a real provider API.
           OPENROUTER_API_KEY: ''
