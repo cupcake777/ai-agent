@@ -55,6 +55,11 @@ on:
         type: boolean
         required: false
         default: true
+      strict_acceptance:
+        description: Strict acceptance mode forwarded to Windows E2E.
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -190,6 +195,8 @@ jobs:
     name: Windows install + update E2E
     if: inputs.e2e_upgrade
     uses: ./.github/workflows/windows-install-update-e2e.yml
+    with:
+      strict_acceptance: ${{ inputs.strict_acceptance }}
 
   e2e-windows:
     # Real Hermes processes on a real Windows host (tests/e2e/core/windows): hermes.exe,
@@ -228,6 +235,7 @@ jobs:
           scripts/run_tests.sh tests/e2e/core/windows/ -- \
             -m "platforms and integration" -v --tb=short -rA
         env:
+          HERMES_E2E_STRICT_ACCEPTANCE: ${{ inputs.strict_acceptance }}
           # Each file owns a real ConPTY/process tree. Running all six at once
           # starves prompt startup on the standard four-vCPU runner.
           HERMES_TEST_WORKERS: '3'

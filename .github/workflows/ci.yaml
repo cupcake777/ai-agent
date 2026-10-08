@@ -106,6 +106,8 @@ jobs:
               for lane, value in values.items():
                   if os.environ['RELEASE'] == 'true' and value in ('true', 'false'):
                       value = 'true'
+                  if value is None:
+                      continue
                   if '\n' in value or '\r' in value:
                       continue
                   output.write(f'{lane}={value}\n')
@@ -126,11 +128,12 @@ jobs:
   tests:
     name: Python tests
     needs: detect
-    if: needs.detect.outputs.python == 'true'
+    if: needs.detect.outputs.python == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.e2e_upgrade == 'true'
     uses: ./.github/workflows/tests.yml
     with:
       e2e: ${{ needs.detect.outputs.e2e == 'true' }}
       e2e_upgrade: ${{ needs.detect.outputs.e2e_upgrade == 'true' }}
+      strict_acceptance: ${{ inputs.strict_acceptance }}
 
   # macOS + Windows lanes. The main `tests` lane above is Linux-only, and
   # the OS-marked tests it collects are skipped there by design (see the
@@ -139,7 +142,7 @@ jobs:
   tests-os:
     name: OS-specific tests
     needs: detect
-    if: needs.detect.outputs.python == 'true'
+    if: needs.detect.outputs.python == 'true' || needs.detect.outputs.e2e == 'true' || needs.detect.outputs.e2e_upgrade == 'true' || needs.detect.outputs.desktop_updater == 'true'
     uses: ./.github/workflows/tests-os.yml
     with:
       # The Windows lane spawns the real desktop-update hand-off script
@@ -148,6 +151,7 @@ jobs:
       desktop_updater: ${{ needs.detect.outputs.desktop_updater == 'true' }}
       e2e: ${{ needs.detect.outputs.e2e == 'true' }}
       e2e_upgrade: ${{ needs.detect.outputs.e2e_upgrade == 'true' }}
+      strict_acceptance: ${{ inputs.strict_acceptance }}
 
   lint:
     name: Python lints
@@ -218,7 +222,7 @@ jobs:
     needs: detect
     # The server-only fork intentionally prunes website/. Keep the reusable
     # workflow in sync with upstream, but do not invoke it in fork CI.
-    if: ${{ needs.detect.outputs.site == 'true' && github.repository != 'cupcake777/ai-agent' }}
+    if: ${{ needs.detect.outputs.site == 'true' && (github.repository || 'cupcake777/ai-agent') != 'cupcake777/ai-agent' }}
     uses: ./.github/workflows/docs-site-checks.yml
 
   history-check:
@@ -258,7 +262,7 @@ jobs:
     name: Icon assets freshness
     needs: detect
     # The generator includes website assets, which this fork does not ship.
-    if: ${{ needs.detect.outputs.site == 'true' && github.repository != 'cupcake777/ai-agent' }}
+    if: ${{ needs.detect.outputs.site == 'true' && (github.repository || 'cupcake777/ai-agent') != 'cupcake777/ai-agent' }}
     uses: ./.github/workflows/icons-freshness-check.yml
 
   case-collision-check:
@@ -372,7 +376,7 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           RELEASE: ${{ inputs.release }}
-          SERVER_FORK: ${{ github.repository == 'cupcake777/ai-agent' }}
+          SERVER_FORK: ${{ (github.repository || 'cupcake777/ai-agent') == 'cupcake777/ai-agent' }}
         run: |
           args=()
           if [ "$RELEASE" = true ]; then args+=(--release); fi

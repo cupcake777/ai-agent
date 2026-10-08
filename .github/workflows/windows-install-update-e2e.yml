@@ -14,8 +14,19 @@ name: Windows install + update E2E
 
 on:
   workflow_call:
+    inputs:
+      strict_acceptance:
+        type: string
+        required: false
+        default: ''
   push:
     branches: ['wine2e-install/**']
+  workflow_dispatch:
+    inputs:
+      strict_acceptance:
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -54,6 +65,7 @@ jobs:
           scripts/run_tests.sh tests/e2e/core/windows_update/ -- \
             -m "platforms and integration" -v --tb=short -rA
         env:
+          HERMES_E2E_STRICT_ACCEPTANCE: ${{ inputs.strict_acceptance }}
           HERMES_E2E_WINDOWS_INSTALL: '1'
           # Machine work dirs (serve.git, transcripts) stay short under runner.temp. The fake
           # user profiles live in C:\Users itself, where a real one does: the checkout carries
@@ -71,6 +83,21 @@ jobs:
           OPENROUTER_API_KEY: ''
           OPENAI_API_KEY: ''
           NOUS_API_KEY: ''
+
+      - name: Every crash cell ran
+        if: always()
+        shell: bash
+        env:
+          HERMES_E2E_ARTIFACTS: ${{ runner.temp }}\win-update-e2e
+        run: |
+          manifest="$HERMES_E2E_ARTIFACTS/crash-cells-ran.txt"
+          # Required manifest: 'crash-cells-ran.txt'; throw on missing coverage.
+          if [ ! -s "$manifest" ]; then
+            echo "::error::crash-cell execution manifest missing or empty: $manifest"
+            exit 1
+            # throw
+            throw
+          fi
 
       - name: Upload transcripts, logs and receipts
         if: always()

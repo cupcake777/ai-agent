@@ -16,6 +16,11 @@ on:
         type: boolean
         required: false
         default: true
+      strict_acceptance:
+        description: Strict acceptance mode forwarded to E2E suites.
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -178,6 +183,7 @@ jobs:
           mapfile -t files < <(find tests/e2e -name 'test_*.py' -not -path 'tests/e2e/core/upgrade/*' | sort)
           scripts/run_tests.sh --include-integration "${files[@]}"
         env:
+          HERMES_E2E_STRICT_ACCEPTANCE: ${{ inputs.strict_acceptance }}
           # An e2e file is a process tree, not one CPU-bound pytest worker. With
           # 32 files at once the hosted run starved live children before their
           # ready frames (empty stderr, still alive) and hit 60–120s deadlines
@@ -353,6 +359,7 @@ jobs:
           printf 'shard %s: %s\n' "$SHARD" "${files[*]}"
           scripts/run_tests.sh --include-integration "${files[@]}"
         env:
+          HERMES_E2E_STRICT_ACCEPTANCE: ${{ inputs.strict_acceptance }}
           SHARD: ${{ matrix.shard }}
           # Each file drives real installs/updaters (process trees plus uv and
           # git I/O); cpu_count of them at once starves their deadlines. A

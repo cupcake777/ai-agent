@@ -31,6 +31,12 @@ EXCLUDED_JOBS = frozenset((*PR_ONLY_JOBS, *DEFERRED_JOBS))
 
 NEEDS_JSON_OUTPUT = "needs-json"
 
+_UPDATE_CONSUMER_LANES = {
+    "tests": ("python", "e2e", "e2e_upgrade"),
+    "tests-os": ("python", "desktop_updater", "e2e", "e2e_upgrade"),
+    "e2e-desktop-update": ("e2e_desktop_update",),
+}
+
 
 def evaluate_gate(
     needs: dict[str, dict[str, Any]] | None,
@@ -48,11 +54,15 @@ def evaluate_gate(
     if not entries:
         failed.append("<no-needs>")
     excluded_jobs = EXCLUDED_JOBS | (FORK_NOT_APPLICABLE_JOBS if server_fork else frozenset())
+    lanes = (entries.get("detect") or {}).get("outputs") or {}
+    required = {job for job, keys in _UPDATE_CONSUMER_LANES.items()
+                if any(lanes.get(key) in ("true", True) for key in keys)}
+    failed.extend(required - entries.keys())
     for name, info in entries.items():
         result = (info or {}).get("result")
         if result == "success":
             continue
-        if result == "skipped" and (not release or name in excluded_jobs):
+        if result == "skipped" and name not in required and (not release or name in excluded_jobs):
             allowed_skips.append(name)
             continue
         failed.append(name)

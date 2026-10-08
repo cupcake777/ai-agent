@@ -189,7 +189,10 @@ const reconciler = createReconciler({
       rootNode.onComputeLayout()
     }
 
-    if (process.env.NODE_ENV === 'test') {
+    // Vitest does not guarantee NODE_ENV=test. Keep synchronous commits in
+    // test runners so renderSync callers can observe the first frame before
+    // returning (the production scheduler intentionally defers it).
+    if (process.env.NODE_ENV === 'test' || process.env.VITEST) {
       if (rootNode.childNodes.length === 0 && rootNode.hasRenderedContent) {
         return
       }
