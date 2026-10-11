@@ -140,13 +140,20 @@ def resolve_gateway_approval(session_key: str, choice: str,
                              resolve_all: bool = False,
                              reason: Optional[str] = None,
                              request_id: Optional[str] = None,
-                             approval_id: Optional[str] = None) -> int:
+                             approval_id: Optional[str] = None,
+                             source: Optional[str] = None,
+                             actor: Optional[str] = None) -> int:
     """Unblock waiting agent thread(s) from the gateway's /approve or /deny handler.
 
     *resolve_all* resolves every pending approval (``/approve all``); otherwise the oldest
     (FIFO) or the one matching *request_id*. ``approval_id`` is a compatibility alias for
     desktop approval plugins; *request_id* wins when both are supplied. *reason* is the ``/deny <reason>`` free text,
     relayed to the agent in the BLOCKED message. Returns the number resolved.
+
+    *source* names a surface outside the session's chat that answered (e.g. a desktop approval
+    plugin) and *actor* how to show it ("anotify desktop · MacBook"). The chat's prompt card is then
+    edited to say so instead of keeping live buttons; ``post_approval_response`` gets ``decided_by``.
+    Leave both unset when the chat itself answered — its own button/command already gave feedback.
     """
     with _lock:
         queue = _gateway_queues.get(session_key)
@@ -172,6 +179,7 @@ def resolve_gateway_approval(session_key: str, choice: str,
             entry.result = choice
             if reason:
                 entry.reason = reason
+            entry.source, entry.actor = source, actor or source
             entry.event.set()
     return len(targets)
 
@@ -199,13 +207,16 @@ def list_gateway_approvals(session_key: str) -> list[dict]:
         return [dict(entry.data) for entry in _gateway_queues.get(session_key, [])]
 
 
-def register_gateway_settle(session_key: str, request_id: str, settle) -> bool:
+def register_gateway_settle(session_key: str, request_id: str, settle, *, with_outcome: bool = False) -> bool:
     """Attach ``settle(reason)`` to one pending approval; it runs once when that wait ends by any path.
+    With *with_outcome* it is called ``settle(reason, outcome)``, where ``outcome`` is
+    ``{"choice", "source", "actor"}`` (``source`` set when a surface outside the chat answered).
     False when the request is no longer pending (the surface should withdraw its prompt itself)."""
     with _lock:
         for entry in _gateway_queues.get(session_key, []):
             if entry.data.get("request_id") == request_id:
                 entry.settle = settle
+                entry.settle_outcome = with_outcome
                 return True
     return False
 
