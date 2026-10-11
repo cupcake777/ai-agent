@@ -608,6 +608,7 @@ gateway:
     smart_deny_heading: "⚠️ **Умный DENY — переопределение владельца на одну операцию:**"
     timed_out_notice: "⌛ Время на одобрение истекло через {window} — команда НЕ выполнена. Попросите меня повторить, если она всё ещё нужна, или увеличьте approvals.timeout в config.yaml."
     timed_out_card_body: "{notice}\n```\n{command}\n```"
+    answered_elsewhere: "{choice} — ответ получен в {where}"
     action_once: "Разрешить один раз"
     action_session: "Разрешить на сеанс"
     action_always: "Разрешать всегда"

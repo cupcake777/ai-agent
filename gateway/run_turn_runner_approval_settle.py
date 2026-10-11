@@ -1,9 +1,10 @@
-"""Tell the chat when an exec-approval prompt times out (messaging platforms).
+"""Tell the chat how an exec-approval prompt ended when the chat itself did not answer it.
 
-``tools.approval_gateway_wait._await_gateway_decision`` calls ``entry.settle(reason)`` once the
-wait ends. Only the TUI registered such a hook, so on Telegram / Slack / WhatsApp a card whose
-timer ran out kept live buttons and the user never learned the command did NOT run. The turn
-runner registers the hook here right after the prompt was delivered.
+``tools.approval_gateway_wait._await_gateway_decision`` calls the settle hook once the wait ends.
+Only the TUI registered such a hook, so on Telegram / Slack / WhatsApp a card kept live buttons
+after its timer ran out — and after another surface (a desktop approval plugin calling
+``resolve_gateway_approval(source=...)``) answered it — and the user never learned what happened.
+The turn runner registers the hook here right after the prompt was delivered.
 
 Best-effort by design: a failed notice is logged at debug — the approval already resolved as
 "no", and nothing here may block the agent thread.
@@ -15,14 +16,20 @@ import logging
 from typing import Any, Callable, Optional
 
 from agent.i18n import t
-from gateway.platforms.base_exec_approval import approval_timeout_seconds, format_approval_timed_out_notice
+from gateway.platforms.base_exec_approval import (
+    approval_timeout_seconds,
+    ea_action_labels,
+    format_approval_timed_out_notice,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def register_timeout_notice(
+def register_card_settle(
     runner, approval_data: dict, *, command: str, card_message_id: Optional[str]) -> None:
-    """Arm a settle hook that posts the timed-out notice for ``approval_data['request_id']``.
+    """Arm a settle hook for ``approval_data['request_id']`` that tells the chat when the prompt
+    timed out or was answered on another surface (an answer from the chat itself already
+    produced its own feedback).
 
     ``runner`` is the ``TurnRunner`` (for ``_ctx`` and ``_schedule``); ``card_message_id`` is the
     delivered BUTTON card's id when the adapter returned one, so the card itself is edited in place
@@ -39,26 +46,37 @@ def register_timeout_notice(
         return
     timeout_s = approval_timeout_seconds()
 
-    def settle(reason: str) -> None:
-        if reason != "timeout":
-            return  # answered / interrupted / notify_failed already produced their own feedback
+    def settle(reason: str, outcome: Optional[dict] = None) -> None:
+        outcome = outcome or {}
+        if reason == "timeout":
+            notice = format_approval_timed_out_notice(timeout_s)
+        elif reason == "resolved" and outcome.get("source") and outcome.get("choice"):
+            notice = answered_elsewhere_notice(outcome["choice"], outcome.get("actor") or outcome["source"])
+        else:
+            return  # answered in the chat / interrupted / notify_failed already produced their own feedback
         # Same guard as every other late notice in TurnRunner: after /stop, /new or a restart the
         # turn is over and this chat belongs to a newer run — do not edit or post into it.
         still_current = getattr(runner._ctx, "_run_still_current", None)
         if callable(still_current) and not still_current():
             return
         runner._schedule(
-            _post_timeout_notice(runner._ctx, command, card_message_id, timeout_s),
-            "Approval timeout notice scheduling error")
+            _post_settle_notice(runner._ctx, command, card_message_id, notice),
+            "Approval settle notice scheduling error")
 
-    register_gateway_settle(session_key, request_id, settle)
+    register_gateway_settle(session_key, request_id, settle, with_outcome=True)
 
 
-async def _post_timeout_notice(ctx, command: str, card_message_id: Optional[str], timeout_s: int) -> None:
+def answered_elsewhere_notice(choice: str, where: str) -> str:
+    """"✅ Allow Once — answered in anotify desktop" for a card another surface settled."""
+    label = ea_action_labels().get(choice, choice)
+    icon = "❌" if choice == "deny" else "✅"
+    return f"{icon} " + t("gateway.exec_approval.answered_elsewhere", choice=label, where=where)
+
+
+async def _post_settle_notice(ctx, command: str, card_message_id: Optional[str], notice: str) -> None:
     from gateway.run import _interim_metadata
 
     adapter = ctx._status_adapter
-    notice = format_approval_timed_out_notice(timeout_s)
     metadata = _interim_metadata(ctx._status_thread_metadata)
     try:
         # Plain markdown, not the card's platform markup: ``edit_message`` re-formats it itself.
@@ -68,7 +86,7 @@ async def _post_timeout_notice(ctx, command: str, card_message_id: Optional[str]
             return
         await adapter.send(ctx._status_chat_id, notice, metadata=metadata)
     except Exception:
-        logger.debug("Approval timeout notice failed", exc_info=True)
+        logger.debug("Approval settle notice failed", exc_info=True)
 
 
 async def _edit_card(adapter, chat_id: str, message_id: str, content: str) -> bool:

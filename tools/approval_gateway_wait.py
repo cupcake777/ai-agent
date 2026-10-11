@@ -24,7 +24,8 @@ logger = logging.getLogger("tools.approval")
 
 class _ApprovalEntry:
     """One pending dangerous-command approval inside a gateway session."""
-    __slots__ = ("event", "data", "result", "reason", "acknowledged", "settle", "cancelled")
+    __slots__ = ("event", "data", "result", "reason", "acknowledged", "settle", "settle_outcome",
+                 "cancelled", "source", "actor")
 
     def __init__(self, data: dict):
         self.event = threading.Event()
@@ -36,7 +37,13 @@ class _ApprovalEntry:
         # Surface hook run once when the wait ends by ANY path (answer, timeout, interrupt, /approve from
         # another client): the tui_gateway withdraws its open server→client request through it.
         self.settle = None
+        # True when ``settle`` takes ``(reason, outcome)``; see ``register_gateway_settle``.
+        self.settle_outcome = False
         self.result: str | None = None  # "once"|"session"|"always"|"deny"
+        # Who answered when it was not the session's own chat (``resolve_gateway_approval(source=...)``):
+        # a surface id such as "anotify", plus a display label for the card ("anotify desktop · MacBook").
+        self.source: str | None = None
+        self.actor: str | None = None
         # Free-text reason from ``/deny <reason>`` so the agent can adapt, not just hear "denied".
         self.reason: str | None = None
         # Why the prompt was withdrawn with nobody answering (interrupt cause, session teardown);
@@ -88,11 +95,15 @@ def _cancel_cause(state: str, entry) -> str | None:
     return None
 
 
-def _finish(payload: dict, resolved: bool, choice: str | None, reason, **extra) -> dict:
+def _finish(payload: dict, resolved: bool, choice: str | None, reason, decided_by: str | None = None,
+            **extra) -> dict:
     """Fire the post hook and build the decision dict. Unresolved (timeout) and
     a None choice both mean the user never answered; ``cancelled`` carries the
-    cause when the prompt was withdrawn rather than answered."""
-    _ctx._fire_approval_hook("post_approval_response", **payload, choice=_hook_choice(resolved, choice, extra), **extra)
+    cause when the prompt was withdrawn rather than answered. ``decided_by`` names the
+    external surface that answered (hook only; absent when the session's own chat did)."""
+    hook_extra = {**extra, "decided_by": decided_by} if decided_by else extra
+    _ctx._fire_approval_hook("post_approval_response", **payload, choice=_hook_choice(resolved, choice, extra),
+                             **hook_extra)
     return {"resolved": resolved, "choice": choice, "reason": reason, **extra}
 
 
@@ -189,6 +200,7 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
             if not queue:
                 _approval._gateway_queues.pop(session_key, None)
             settle, entry.settle = entry.settle, None
+            outcome = {"choice": choice, "source": entry.source, "actor": entry.actor}
         if settle is not None:
             # ``request.cancel`` carries a RequestCancelReason: a choice committed from another surface is
             # ``resolved``; a withdrawn entry (woken with no choice — session torn down, turn ended, client
@@ -198,7 +210,10 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
             else:
                 reason = state
             try:
-                settle(reason)
+                if entry.settle_outcome:
+                    settle(reason, outcome)
+                else:
+                    settle(reason)
             except Exception:
                 logger.debug("approval settle hook failed", exc_info=True)
         return choice
@@ -234,4 +249,4 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict, *,
         resolved = state != "timeout" or choice is not None
         extra = {"cancelled": cancelled} if cancelled else {}
         human.outcome = _hook_choice(resolved, choice, extra)
-        return _finish(payload, resolved, choice, entry.reason, **extra)
+        return _finish(payload, resolved, choice, entry.reason, decided_by=entry.source, **extra)

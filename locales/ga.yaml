@@ -608,6 +608,7 @@ gateway:
     smart_deny_heading: "⚠️ **DIÚLTÚ cliste — sárú úinéara d'oibríocht amháin:**"
     timed_out_notice: "⌛ Chuaigh an cead thar am tar éis {window} — NÍOR ritheadh an t-ordú. Iarr orm triail eile a bhaint as más mian leat é fós, nó ardaigh approvals.timeout i config.yaml."
     timed_out_card_body: "{notice}\n```\n{command}\n```"
+    answered_elsewhere: "{choice} — freagraithe in {where}"
     action_once: "Ceadaigh Uair Amháin"
     action_session: "Ceadaigh don Seisiún"
     action_always: "Ceadaigh i gCónaí"

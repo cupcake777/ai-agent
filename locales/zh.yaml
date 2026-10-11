@@ -608,6 +608,7 @@ gateway:
     smart_deny_heading: "⚠️ **智能拒绝——所有者对单次操作的覆盖：**"
     timed_out_notice: "⌛ 审批已超时（{window}）——命令未运行。如仍需要，请让我再试一次，或提高 config.yaml 中的 approvals.timeout。"
     timed_out_card_body: "{notice}\n```\n{command}\n```"
+    answered_elsewhere: "{choice} —— 已在 {where} 处理"
     action_once: "允许一次"
     action_session: "本会话允许"
     action_always: "始终允许"

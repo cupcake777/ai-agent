@@ -608,6 +608,7 @@ gateway:
     smart_deny_heading: "⚠️ **스마트 거부 — 한 번의 작업에 대한 소유자 재정의:**"
     timed_out_notice: "⌛ {window} 후 승인 시간이 초과되어 명령이 실행되지 않았어요. 여전히 원하시면 다시 요청하시거나, config.yaml의 approvals.timeout을 늘려 주세요."
     timed_out_card_body: "{notice}\n```\n{command}\n```"
+    answered_elsewhere: "{choice} — {where}에서 응답함"
     action_once: "한 번 허용"
     action_session: "세션 동안 허용"
     action_always: "항상 허용"

@@ -701,6 +701,7 @@ gateway:
       ```
       {command}
       ```
+    answered_elsewhere: "{choice} — répondu dans {where}"
     action_once: "Autoriser une fois"
     action_session: "Autoriser (session)"
     action_always: "Toujours autoriser"
