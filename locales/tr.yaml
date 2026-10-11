@@ -608,6 +608,7 @@ gateway:
     smart_deny_heading: "⚠️ **Akıllı REDDET — tek işlem için sahip geçersiz kılması:**"
     timed_out_notice: "⌛ Onay {window} sonra zaman aşımına uğradı — komut çalıştırılMADI. Hâlâ istiyorsanız yeniden denememi isteyin veya config.yaml içinde approvals.timeout değerini yükseltin."
     timed_out_card_body: "{notice}\n```\n{command}\n```"
+    answered_elsewhere: "{choice} — {where} üzerinden yanıtlandı"
     action_once: "Bir Kez İzin Ver"
     action_session: "Oturum İçin İzin Ver"
     action_always: "Her Zaman İzin Ver"

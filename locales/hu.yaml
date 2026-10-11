@@ -611,6 +611,7 @@ gateway:
     smart_deny_heading: "⚠️ **Okos ELUTASÍTÁS — tulajdonosi felülbírálás egy műveletre:**"
     timed_out_notice: "⌛ A jóváhagyás {window} után lejárt — a parancs NEM futott le. Ha még mindig kell, kérd újra, vagy emeld meg az approvals.timeout értékét a config.yaml-ben."
     timed_out_card_body: "{notice}\n```\n{command}\n```"
+    answered_elsewhere: "{choice} — megválaszolva itt: {where}"
     action_once: "Engedélyezés egyszer"
     action_session: "Engedélyezés a munkamenetre"
     action_always: "Engedélyezés mindig"

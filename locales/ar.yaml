@@ -608,6 +608,7 @@ gateway:
     smart_deny_heading: "⚠️ **رفض ذكي — تجاوز المالك لعملية واحدة:**"
     timed_out_notice: "⌛ انتهت مهلة الموافقة بعد {window} — لم يُنفَّذ الأمر. اطلب منّي المحاولة مجددًا إن كنت لا تزال تريده، أو ارفع قيمة approvals.timeout في config.yaml."
     timed_out_card_body: "{notice}\n```\n{command}\n```"
+    answered_elsewhere: "{choice} — تمت الإجابة في {where}"
     action_once: "السماح مرة"
     action_session: "السماح للجلسة"
     action_always: "السماح دائمًا"
