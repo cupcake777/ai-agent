@@ -32,16 +32,10 @@ name: Install & Update E2E
 # between. A hardcoded list would stop covering the newest release the day
 # after it ships, and would pin an "oldest" that nobody still runs.
 #
-# Triggers:
-#   * manually, where maintainers can opt into the expensive full matrix;
-#   * as a reusable workflow for the stable-release orchestrator.
-#
-# This fork does not publish Hermes releases, so it must not duplicate upstream's
-# twice-daily release/install matrix or run the expensive matrix on pull requests.
-# Fork checkouts also do not carry every upstream release tag, which makes those
-# runs red for reasons unrelated to this fork's runtime. Upstream owns scheduled
-# release coverage; maintainers can still launch a focused run here when changing
-# the install/update path.
+# Triggers: release builds only. The stable-release gate calls it
+# (workflow_call, route=all), and a maintainer can dispatch it by hand to pick
+# the route (a preset or specific legs) and how many releases to sample. It
+# never runs on pull requests, pushes to main, or a schedule.
 
 on:
   workflow_dispatch:
@@ -79,6 +73,10 @@ on:
     # manual dispatch — a source (non-bundle) release run passes route=all
     # with empty manifests and gets the source install/update matrix only.
     inputs:
+      commit:
+        description: Commit to test and build. Empty keeps the triggering commit.
+        type: string
+        default: ''
       release:
         description: 'Stable-release candidate run (informational; jobs behave as route=all with empty manifests).'
         required: false
@@ -115,16 +113,19 @@ on:
         type: string
         default: ''
 
-
 permissions:
   contents: read
 
 # A workflow_call run (stable release) is never cancelled: its group uses
 # github.run_id so a parent rerun cannot kill this child mid-flight. The
-# scheduled/manual runs keep ref-scoped collapse.
+# manual runs keep ref-scoped collapse.
 concurrency:
   group: install-e2e-${{ inputs.release == true && github.run_id || github.ref }}
   cancel-in-progress: ${{ inputs.release != true }}
+
+env:
+  # A stable run is on the default branch, so GITHUB_SHA is not the commit under test.
+  HERMES_TESTED_COMMIT: ${{ inputs.commit || github.sha }}
 
 jobs:
   pick-releases:
@@ -138,19 +139,15 @@ jobs:
       # checkout: no blobs (filter), no other files (sparse), but DO fetch
       # tags -- they are the whole input, and the default shallow checkout
       # has none.
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v7.0.1
         with:
+          ref: ${{ inputs.commit }}
           filter: blob:none
           fetch-tags: true
           sparse-checkout: |
             scripts/sandbox/pick-release-tags.sh
             scripts/releases/pick_tags.py
           sparse-checkout-cone-mode: false
-      - name: Fetch upstream release tags
-        run: |
-          set -euo pipefail
-          git remote add release-upstream https://github.com/NousResearch/hermes-agent.git
-          git fetch -q --force --tags release-upstream 'refs/tags/v*:refs/tags/v*'
       - id: pick
         env:
           # Inputs never touch shell syntax directly: TAG_COUNT arrives via
@@ -163,7 +160,7 @@ jobs:
           # stable release the candidate tag itself is the newest release
           # tag, and sampling it as an OLD version would produce a no-change
           # update leg — the candidate must never update from itself.
-          TAG_COUNT: ${{ github.event_name == 'pull_request' && '1' || inputs.tag-count || 2 }}
+          TAG_COUNT: ${{ inputs.tag-count || 2 }}
           INSTALL_REF: ${{ inputs.install-ref }}
           EXCLUDE_REF: ${{ inputs.exclude-ref }}
           RELEASE_MODE: ${{ inputs.release }}
@@ -208,15 +205,15 @@ jobs:
       windows-legs: ${{ steps.gen.outputs.windows-legs }}
       macos-legs: ${{ steps.gen.outputs.macos-legs }}
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v7.0.1
         with:
+          ref: ${{ inputs.commit }}
           sparse-checkout: scripts/sandbox/generate-e2e-matrix.mjs
           sparse-checkout-cone-mode: false
       - id: gen
         env:
           # Free text on dispatch, so it reaches the script as data, never as script.
-          # Scheduled runs have no inputs: the default route. PRs run the pr subset.
-          ROUTE: ${{ github.event_name == 'pull_request' && 'pr' || inputs.route || 'all' }}
+          ROUTE: ${{ inputs.route || 'all' }}
         run: |
           set -euo pipefail
           matrices="$(node scripts/sandbox/generate-e2e-matrix.mjs \
@@ -234,8 +231,7 @@ jobs:
 
   bundle-inputs:
     name: Validate pinned bundle transitions
-    # Bundled legs need dispatch-only manifests; a PR never runs them.
-    if: github.event_name != 'pull_request'
+    # Bundled legs need dispatch-only manifests.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -244,7 +240,9 @@ jobs:
       windows-arch: ${{ steps.inputs.outputs.windows-arch }}
       macos-arch: ${{ steps.inputs.outputs.macos-arch }}
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v7.0.1
+        with:
+          ref: ${{ inputs.commit }}
       - id: inputs
         env:
           BUNDLE_WINDOWS_MANIFEST: ${{ inputs.windows-bundle-manifest }}
@@ -263,6 +261,7 @@ jobs:
       matrix: ${{ fromJSON(needs.bundle-inputs.outputs.windows) }}
     uses: ./.github/workflows/install-e2e-windows-run.yml
     with:
+      commit: ${{ inputs.commit }}
       install-method: packaged-app
       update-method: open-app-update
       install-ref: ${{ matrix.install_ref }}
@@ -279,6 +278,7 @@ jobs:
       matrix: ${{ fromJSON(needs.bundle-inputs.outputs.macos) }}
     uses: ./.github/workflows/install-e2e-macos-run.yml
     with:
+      commit: ${{ inputs.commit }}
       install-method: packaged-app
       update-method: open-app-update
       install-ref: ${{ matrix.install_ref }}
@@ -299,6 +299,7 @@ jobs:
       matrix: ${{ fromJSON(needs.generate-matrix.outputs.linux) }}
     uses: ./.github/workflows/install-e2e-run.yml
     with:
+      commit: ${{ inputs.commit }}
       install-method: ${{ matrix.install_method }}
       update-method: ${{ matrix.update_method }}
       install-ref: ${{ matrix.install_ref }}
@@ -315,6 +316,7 @@ jobs:
       matrix: ${{ fromJSON(needs.generate-matrix.outputs.windows) }}
     uses: ./.github/workflows/install-e2e-windows-run.yml
     with:
+      commit: ${{ inputs.commit }}
       install-method: ${{ matrix.install_method }}
       update-method: ${{ matrix.update_method }}
       install-ref: ${{ matrix.install_ref }}
@@ -333,6 +335,7 @@ jobs:
     # and the published-dmg GUI driver; the run workflow routes.
     uses: ./.github/workflows/install-e2e-macos-run.yml
     with:
+      commit: ${{ inputs.commit }}
       install-method: ${{ matrix.install_method }}
       update-method: ${{ matrix.update_method }}
       install-ref: ${{ matrix.install_ref }}
@@ -352,8 +355,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v7.0.1
         with:
+          ref: ${{ inputs.commit }}
           sparse-checkout: tests/install/e2e-assets/playback.html
           sparse-checkout-cone-mode: false
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -421,8 +425,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v7.0.1
         with:
+          ref: ${{ inputs.commit }}
           sparse-checkout: |
             scripts/sandbox/generate-e2e-matrix.mjs
             tests/install/e2e-assets/known-failures.json

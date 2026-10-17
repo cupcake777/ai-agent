@@ -4,10 +4,11 @@
 Behavior tests: tests/ci/test_required_results.py
 
 Input: the JSON ``toJSON(needs)`` of the all-checks-pass job on stdin.
-Any non-``success`` result fails the gate. ``skipped`` additionally fails in
-release mode unless the job is in :data:`EXCLUDED_JOBS` (PR-only jobs or
-deferred Desktop E2E), or ``--server-fork`` explicitly enables fork-only
-exclusions. The
+Failures always fail the gate. A skipped or missing update/E2E consumer also
+fails whenever ``detect.outputs`` selects its lane. Other skips additionally
+fail in release mode unless the job is in :data:`EXCLUDED_JOBS` (PR-only jobs
+or the deferred Desktop E2E), or ``--server-fork`` explicitly enables
+fork-only exclusions for capabilities pruned from the server-only fork. The
 OSV scan is advisory in its findings only — its execution is required.
 
     echo "$NEEDS" | python3 scripts/ci/required_results.py [--release]
@@ -21,20 +22,25 @@ import os
 import sys
 from typing import Any
 
-# Jobs that can never run on a release (push/tag) event, plus lanes that are
-# deliberately unavailable in this server-only fork. These are the only skips
-# a strict run tolerates.
-PR_ONLY_JOBS = ("history-check", "lockfile-diff", "supply-chain", "review-labels")
+# Jobs that can never run on a release (push/tag) event, plus the deferred
+# Desktop E2E. These are the only skips a strict run tolerates.
+PR_ONLY_JOBS = ("history-check", "lockfile-diff", "prompt-surface-diff", "supply-chain")
 DEFERRED_JOBS = ("e2e-desktop",)
 FORK_NOT_APPLICABLE_JOBS = frozenset(("docs-site", "icons-freshness-check"))
 EXCLUDED_JOBS = frozenset((*PR_ONLY_JOBS, *DEFERRED_JOBS))
 
 NEEDS_JSON_OUTPUT = "needs-json"
 
+# Reusable-workflow parents of the update/E2E consumers, and of the real
+# remote-backend and catalog lanes. The actual detect outputs already arrive in
+# toJSON(needs); a selected consumer cannot skip merely because this is a PR
+# rather than a release.
 _UPDATE_CONSUMER_LANES = {
     "tests": ("python", "e2e", "e2e_upgrade"),
     "tests-os": ("python", "desktop_updater", "e2e", "e2e_upgrade"),
     "e2e-desktop-update": ("e2e_desktop_update",),
+    "remote-backends": ("remote_backends",),
+    "catalog-tests": ("catalog",),
 }
 
 

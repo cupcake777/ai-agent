@@ -42,7 +42,7 @@ def _set_portal_conversation_context(conversation_id: str) -> None:
 # In-flight stage-2 upgrade threads. They bill their aux usage to the session from a daemon thread,
 # so a process that reads the ledger right before exit (``-z --usage-file``) must be able to join
 # them (bounded) instead of racing the write (#112848).
-_UPGRADE_THREADS: "weakref.WeakSet[threading.Thread]" = weakref.WeakSet()
+_UPGRADE_THREADS: weakref.WeakSet[threading.Thread] = weakref.WeakSet()
 
 
 def wait_for_title_upgrades(timeout: float = 10.0) -> None:
@@ -489,7 +489,7 @@ def generate_title(
     user_message: str,
     timeout: Optional[float] = None,
     failure_callback: Optional[FailureCallback] = None,
-    main_runtime: dict = None,
+    main_runtime: dict | None = None,
     runtime_validator: Optional[RuntimeValidator] = None,
     title_preview: str | None = None,
 ) -> Optional[str]:
@@ -661,7 +661,7 @@ def auto_title_session(
     session_id: str,
     user_message: str,
     failure_callback: Optional[FailureCallback] = None,
-    main_runtime: dict = None,
+    main_runtime: dict | None = None,
     title_callback: Optional[TitleCallback] = None,
     runtime_validator: Optional[RuntimeValidator] = None,
     title_preview: str | None = None,
@@ -756,7 +756,7 @@ def maybe_auto_title(
     user_message: str,
     conversation_history: Optional[list] = None,
     failure_callback: Optional[FailureCallback] = None,
-    main_runtime: dict = None,
+    main_runtime: dict | None = None,
     title_callback: Optional[TitleCallback] = None,
     runtime_validator: Optional[RuntimeValidator] = None,
     title_preview: str | None = None,

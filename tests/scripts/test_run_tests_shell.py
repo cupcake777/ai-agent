@@ -27,6 +27,7 @@ def test_shell_runner_executes_tests_and_propagates_failure(tmp_path):
         env={**{key: value for key, value in os.environ.items() if key != "HERMES_TEST_SLICE"},
              "HERMES_PYTHON": sys.executable, "HERMES_TEST_FILE_RETRIES": "0",
              "PATHEXT": ".COM;.EXE;.BAT;.CMD"},
+             check=False,
     )
     assert result.returncode != 0, result.stdout + result.stderr
     assert "runner failure propagation canary" in result.stdout + result.stderr
