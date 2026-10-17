@@ -128,6 +128,24 @@ def test_state_db_guard_passes_valid_db(tmp_path, monkeypatch):
     assert step_state_db_guard() == {"ok": True}
 
 
+def test_state_db_guard_uses_boot_size_ceiling(tmp_path, monkeypatch):
+    """Interactive boot must not request the 2 GiB full-walk ceiling."""
+    from hermes_cli.backup import DEFAULT_INTEGRITY_CHECK_MAX_BYTES
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "state.db").write_bytes(b"x" * 200)
+    seen = {}
+
+    def fake(path, **kwargs):
+        seen["kwargs"] = kwargs
+        return {"valid": True, "message": "ok", "size": 200}
+
+    monkeypatch.setattr("hermes_cli.backup.verify_sqlite_integrity", fake)
+    assert step_state_db_guard() == {"ok": True}
+    assert seen["kwargs"]["max_bytes"] == post_update.BOOT_INTEGRITY_CHECK_MAX_BYTES
+    assert seen["kwargs"]["max_bytes"] < DEFAULT_INTEGRITY_CHECK_MAX_BYTES
+
+
 # ── step_drop_live_plugin_catalog ────────────────────────────────────
 
 

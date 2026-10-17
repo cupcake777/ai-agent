@@ -123,13 +123,23 @@ def step_sync_skills() -> dict:
 # state.db integrity guard (#68474 — check-only variant)
 # ---------------------------------------------------------------------------
 
+# ``PRAGMA integrity_check`` walks every page. Boot runs that walk on the live
+# home database, synchronously, before the TUI process is spawned. The backup
+# ceiling (2 GiB) still leaves a ~2 GiB session db on the full walk, which
+# holds the terminal blank until the user gives up. Above this size boot uses
+# the O(1) header + schema probe; ``hermes update`` and backups keep the
+# larger ceiling.
+BOOT_INTEGRITY_CHECK_MAX_BYTES = 256 << 20  # 256 MiB
+
+
 def step_state_db_guard() -> dict:
     """Verify the active home's state.db is intact.
 
     Boot bootstrap has no pre-update snapshot to restore from (that pairing
     lives in ``hermes update``), so this is detection: a corrupt db is
     surfaced loudly in the log instead of the user silently losing session
-    search. Read-only, idempotent.
+    search. Read-only, idempotent. Large live databases get the cheap probe
+    so an interactive launch is not blocked on a multi-gigabyte page walk.
     """
     from hermes_constants import get_hermes_home
     from hermes_cli.backup import verify_sqlite_integrity
@@ -137,7 +147,12 @@ def step_state_db_guard() -> dict:
     state_path = get_hermes_home() / "state.db"
     if not state_path.exists():
         return {"ok": True, "skipped": "no-state-db"}
-    result = verify_sqlite_integrity(state_path, check_header=True, run_pragma=True)
+    result = verify_sqlite_integrity(
+        state_path,
+        check_header=True,
+        run_pragma=True,
+        max_bytes=BOOT_INTEGRITY_CHECK_MAX_BYTES,
+    )
     if result.get("valid"):
         return {"ok": True}
     message = result.get("message", "unknown error")
