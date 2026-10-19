@@ -109,6 +109,24 @@ def _runner_scratch_root() -> str:
     return root
 
 
+def _make_attempt_temp_roots() -> tuple[tempfile.TemporaryDirectory[str], str]:
+    """Create one disk-backed root containing both pytest tmp files and Hermes home.
+
+    The parent process may itself run with TMPDIR under its live Hermes home.  Creating
+    the child home with an unqualified TemporaryDirectory would then put test I/O back
+    under that protected tree before the child's isolated TMPDIR is even installed.
+    Nesting both directories under the runner-owned root keeps collection-time reads
+    isolated and lets one recursive cleanup remove the whole attempt.
+    """
+    temproot = tempfile.mkdtemp(prefix="r-", dir=_runner_scratch_root())
+    try:
+        hermes_home = tempfile.TemporaryDirectory(prefix="hermes-test-home-", dir=temproot)
+    except BaseException:
+        _rmtree_force(temproot)
+        raise
+    return hermes_home, temproot
+
+
 def _default_worker_count() -> int:
     """Return a CPU-safe default; explicit env/CLI overrides still win."""
     configured = os.environ.get("HERMES_TEST_WORKERS")
@@ -634,7 +652,10 @@ def _run_one_file_once(
 
     # Collection imports modules before the autouse fixture can redirect the
     # home. Isolate it here so tests never read a developer's live profile.
-    hermes_home = tempfile.TemporaryDirectory(prefix="hermes-test-home-")
+    # Create it under the same disk-backed per-attempt root as pytest's temp
+    # files; the runner itself may inherit TMPDIR from inside the live Hermes
+    # home, which the home I/O guard must continue to protect.
+    hermes_home, temproot = _make_attempt_temp_roots()
     child_env = os.environ.copy()
     child_env["HERMES_HOME"] = hermes_home.name
     child_env["HERMES_TEST_SANDBOX_HOME"] = hermes_home.name
@@ -655,7 +676,6 @@ def _run_one_file_once(
     #
     # One root for each subprocess removes the shared directory that the race
     # needs. The parent deletes the root after the attempt.
-    temproot = tempfile.mkdtemp(prefix="r-", dir=_runner_scratch_root())
     child_env["PYTEST_DEBUG_TEMPROOT"] = temproot
     # Every tempfile.* call inside the test process lands in the same per-run root, so the
     # parent's cleanup of ``temproot`` removes them too instead of leaving them in /tmp.
