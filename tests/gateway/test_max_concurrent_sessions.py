@@ -17,9 +17,9 @@ def _isolated_active_session_registry(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
     # The active-session cap tests need distinct DM session keys for
     # different chat_ids.  Developer machines may enable unified DM routing in
-    # ~/.hermes/.env, which intentionally collapses Telegram/Weixin/local DMs
-    # into agent:main:unified:dm and turns "new chat" fixtures into the busy
-    # session under test.
+    # ~/.hermes/.env, which intentionally collapses Telegram/Weixin DMs into
+    # agent:main:unified:dm and turns "new chat" fixtures into the busy session
+    # under test.
     monkeypatch.delenv("UNIFIED_DM_SESSION", raising=False)
 
 

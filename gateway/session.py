@@ -696,14 +696,14 @@ def build_session_key(
     not in a thread (threads are shared unless ``thread_sessions_per_user``).
     """
     is_dm = source.chat_type == "dm"
-    # Single-owner deployments may deliberately share one DM transcript across
-    # Telegram, Weixin, and the local CLI. Keep the profile namespace so a
-    # multiplexed gateway can never collapse two profiles into one session.
+    # Single-owner deployments may deliberately share one messaging DM transcript
+    # across Telegram and Weixin. LOCAL is intentionally excluded: CLI/TUI chats
+    # are separate workspaces and must never expose or append the messaging transcript.
     if (
         os.environ.get("UNIFIED_DM_SESSION", "").strip().lower()
         in {"1", "true", "yes", "on"}
         and is_dm
-        and source.platform in {Platform.TELEGRAM, Platform.WEIXIN, Platform.LOCAL}
+        and source.platform in {Platform.TELEGRAM, Platform.WEIXIN}
     ):
         return f"{_session_key_namespace(profile)}:unified:dm"
     chat_id = source.chat_id

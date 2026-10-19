@@ -585,7 +585,7 @@ class TestWhatsAppSessionKeyConsistency:
         local = SessionSource(platform=Platform.LOCAL, chat_id="cli", chat_type="dm")
         assert build_session_key(telegram) == "agent:main:unified:dm"
         assert build_session_key(weixin) == "agent:main:unified:dm"
-        assert build_session_key(local) == "agent:main:unified:dm"
+        assert build_session_key(local) == "agent:main:local:dm:cli"
 
     def test_unified_dm_mode_keeps_profile_namespace(self, monkeypatch):
         monkeypatch.setenv("UNIFIED_DM_SESSION", "true")
