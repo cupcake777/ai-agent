@@ -79,6 +79,20 @@ jobs:
           # failure still fails the step instead of looking like "no changes".
           CHANGED=$(printf '%s' "$CHANGED" | grep -v '/removed\.yaml$' || true)
 
+          # Fork upstream syncs: an entry byte-identical to upstream main already passed
+          # upstream's own admission gate; only entries this fork adds or edits are vetted.
+          if [ -n "$CHANGED" ] && git fetch --no-tags https://github.com/NousResearch/hermes-agent.git \
+              "+refs/heads/main:refs/remotes/upstream/main"; then
+            FORK_ONLY=""
+            while IFS= read -r entry; do
+              [ -z "$entry" ] && continue
+              if ! git diff --quiet refs/remotes/upstream/main HEAD -- "$entry"; then
+                FORK_ONLY="${FORK_ONLY}${entry}"$'\n'
+              fi
+            done <<< "$CHANGED"
+            CHANGED=$(printf '%s' "$FORK_ONLY" | sed '/^$/d')
+          fi
+
           if [ -n "$CHANGED" ]; then
             # Admission PRs must be data-only: the gate's own enforcement code
             # (this workflow, the validator, the composite actions, the built
