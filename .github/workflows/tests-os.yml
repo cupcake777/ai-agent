@@ -12,7 +12,7 @@ name: OS-specific tests
 # is where those markers actually execute:
 #
 #   macos    → ``-m platforms``    on macos-latest
-#   windows  → ``-m platforms``    on windows-latest and windows-latest-32-arm-core
+#   windows  → ``-m platforms``    on windows-latest and windows-11-arm
 #
 # (tests/conftest.py's ``pytest_collection_modifyitems`` hook skips
 # foreign-OS ``platforms(...)`` markers on each host, so one shared ``-m
@@ -88,6 +88,7 @@ jobs:
           - name: Windows-only tests
             runner: windows-latest
             marker: windows
+            timeout: 45
           - name: Windows-only tests (arm64)
             runner: windows-11-arm
             marker: windows
@@ -165,6 +166,12 @@ jobs:
           # (bash 3.2 on the macOS runner: an empty array under ``set -u`` is
           # an unbound-variable error, hence the ``${arr[@]+...}`` idiom.)
           EXTRA_ARGS=()
+          # The slowed-DDL browse test's fixed 2 s post-budget margin is sized for upstream's
+          # 12-vCPU macOS runner; on the fork's 3-vCPU GitHub-hosted runner it fails every run
+          # (also at 2 workers). It is marked linux+macos and keeps running on the Linux lane.
+          if [ "${{ matrix.marker }}" = "macos" ] && [ "${RUNNER_ENVIRONMENT:-}" = "github-hosted" ]; then
+            EXTRA_ARGS+=(--deselect "tests/hermes_cli/test_browse_schema_drift.py::test_slow_browse_reconcile_gives_up_inside_its_budget_and_boot_waits_it_out")
+          fi
           if [ "${{ inputs.desktop_updater }}" != "true" ]; then
             echo "desktop_updater lane off: skipping tests/scripts/desktop_update/test_desktop_update_windows_*.py"
             EXTRA_ARGS+=(--ignore-glob='*test_desktop_update_windows_*.py')
@@ -184,9 +191,12 @@ jobs:
             -m "platforms and not integration" \
             -v --tb=short
         env:
-          # These files spawn nested PowerShell trees. CPU-count parallelism
-          # starves cold child startup before the fixture's idle deadline.
-          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && (runner.arch == 'ARM64' && '2' || '4') || '' }}
+          # These files spawn nested PowerShell trees and time-budgeted subprocesses
+          # (watchdogs, lock waits). Upstream runs them at half the cores of a 12/32-vCPU
+          # runner; the 3-4 vCPU GitHub-hosted runners get the same headroom with 2.
+          HERMES_TEST_WORKERS: '2'
+          # One file holds several such subprocess journeys; 300 s fits a 32-vCPU runner.
+          HERMES_TEST_FILE_TIMEOUT: '600'
           HERMES_TEST_SLICE: ${{ matrix.slice || '' }}
           # Belt-and-suspenders with tests/conftest.py's env blanking: no
           # test may reach a real provider API.

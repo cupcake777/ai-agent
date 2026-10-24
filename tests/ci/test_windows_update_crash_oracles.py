@@ -236,7 +236,7 @@ def test_workflow_requires_the_crash_journey_manifest(tmp_path, monkeypatch):
     names = [s.get("name") for s in steps]
     run, check = steps[names.index("Run Windows install + update E2E")], steps[names.index("Every crash cell ran")]
     assert names.index("Every crash cell ran") > names.index("Run Windows install + update E2E")
-    workflow_steps.required(check, {"inputs": {}, "__status__": {"always": True, "success": True, "failure": False, "cancelled": False}})  # neither disabled nor advisory
+    workflow_steps.required(check, {"inputs": {}})  # neither disabled nor advisory
     assert check["env"]["HERMES_E2E_ARTIFACTS"] == run["env"]["HERMES_E2E_ARTIFACTS"]
     assert f"'{crash.CELLS_RAN_MANIFEST}'" in check["run"] and "throw" in check["run"]
 

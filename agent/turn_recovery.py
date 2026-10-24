@@ -15,7 +15,7 @@ import math
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from agent.conversation_compression import COMPRESSION_RETRY_CONTEXT_REDUCED_STATUS_TEMPLATE
 from agent.fast_mode import fast_mode_unprovisioned, mark_fast_mode_unavailable
@@ -617,6 +617,31 @@ def _reject_all_turns(agent: Any, api_error: Exception) -> bool:
     return bool(reject(api_error)) if callable(reject) else False
 
 
+def _pool_error_context(agent, classified: Any, error_context: Any) -> Any:
+    """What the credential pool sees: a plan limit (usage-window 402) benches only the refused model on the
+    credential, until its reset; every other failure passes the error context through unchanged."""
+    if not (getattr(classified, "error_context", None) or {}).get("usage_window"):
+        return error_context
+    return {**(error_context if isinstance(error_context, dict) else {}), "usage_window": True,
+            **_usage_window_reset_context(agent)}
+
+
+def _usage_window_reset_context(agent) -> dict[str, float]:
+    """``{"reset_at": epoch s}`` for a usage-window 402: when the refused allowance frees up, from the usage
+    headers the 402 carried (the API's error body has no reset). Empty when the state names none, so the
+    pool keeps its default bench."""
+    try:
+        from agent.credits_tracker import window_stop_resets_at_ms
+        from agent.plan_limits import current_model_is_top_tier
+        state = getattr(agent, "_credits_state", None)
+        resets_ms = (window_stop_resets_at_ms(state, model_is_top_tier=current_model_is_top_tier(agent))
+                     if state is not None else None)
+    except Exception:
+        logger.debug("usage-window reset unavailable for the pool", exc_info=True)
+        return {}
+    return {"reset_at": resets_ms / 1000} if isinstance(resets_ms, (int, float)) and resets_ms > 0 else {}
+
+
 def recover_after_classification(
     agent: Any, api_error: Exception, classified: Any, _retry: TurnRetryState, *,
     status_code: Optional[int], error_context: Any, messages: list[dict[str, Any]],
@@ -650,6 +675,8 @@ def recover_after_classification(
 
     if (
         classified.reason == FailoverReason.billing
+        # A usage-window 402 is the plan's own limit: refreshing credentials cannot lift it.
+        and not (getattr(classified, "error_context", None) or {}).get("usage_window")
         and _is_nous_inference_route(
             getattr(agent, "provider", "") or "", getattr(agent, "base_url", "") or ""
         )
@@ -662,7 +689,7 @@ def recover_after_classification(
 
     recovered_with_pool, _retry.has_retried_429 = agent._recover_with_credential_pool(
         status_code=status_code, has_retried_429=_retry.has_retried_429,
-        classified_reason=classified.reason, error_context=error_context,
+        classified_reason=classified.reason, error_context=_pool_error_context(agent, classified, error_context),
         billing_unverified=classified.billing_unverified,
     )
     if recovered_with_pool:
@@ -771,135 +798,13 @@ def recover_after_classification(
     if _refresh_credentials_after_401(agent, api_error, _retry, status_code):
         return True, recovered_with_pool
 
-    if _recover_content_exists_risk_memory(agent, api_error, classified, _retry, api_messages):
+    from agent.turn_recovery_content_risk import recover_content_exists_risk_memory
+    if recover_content_exists_risk_memory(agent, api_error, classified, _retry, api_messages):
         return True, recovered_with_pool
 
     if _recover_format_errors(agent, api_error, classified, _retry, messages, api_messages):
         return True, recovered_with_pool
     return False, recovered_with_pool
-
-
-_CONTENT_EXISTS_RISK_NEEDLE = "content exists risk"
-_L1_MEMORY_OMITTED_STUB = (
-    "[L1 MEMORY.md omitted this request: the provider content filter rejected it. "
-    "Facts remain on disk; use memory/session_search if needed.]"
-)
-
-
-def _is_content_exists_risk(api_error: Exception, classified: Any) -> bool:
-    """DeepSeek hosted API's serving-side input scan (HTTP 400, no completion)."""
-    blob = f"{getattr(classified, 'message', '')} {api_error}".lower()
-    return _CONTENT_EXISTS_RISK_NEEDLE in blob
-
-
-def _l1_memory_snapshot(agent: Any) -> str:
-    store = getattr(agent, "_memory_store", None)
-    if store is None:
-        return ""
-    try:
-        return store.format_for_system_prompt("memory") or ""
-    except Exception:
-        return ""
-
-
-def _strip_l1_memory_block(text: str, snapshot: str = "") -> str:
-    """Replace the frozen MEMORY.md system-prompt block; leave USER.md / the rest intact."""
-    if not text:
-        return text
-    if snapshot and snapshot in text:
-        return text.replace(snapshot, _L1_MEMORY_OMITTED_STUB, 1)
-    try:
-        from tools.memory_tool_store import MEMORY_BLOCK_HEADERS
-    except Exception:
-        return text
-    header = MEMORY_BLOCK_HEADERS["memory"]
-    start = text.find(header)
-    if start < 0:
-        return text
-    block_start = text.rfind("═", 0, start)
-    if block_start >= 0:
-        line_start = text.rfind("\n", 0, block_start)
-        block_start = 0 if line_start < 0 else line_start + 1
-    else:
-        block_start = start
-    user_h = MEMORY_BLOCK_HEADERS["user"]
-    end = text.find(user_h, start + len(header))
-    if end < 0:
-        end = len(text)
-    else:
-        user_sep = text.rfind("═", block_start, end)
-        if user_sep >= 0:
-            line_start = text.rfind("\n", block_start, user_sep)
-            end = block_start if line_start < 0 else line_start + 1
-    return text[:block_start] + _L1_MEMORY_OMITTED_STUB + "\n" + text[end:]
-
-
-def _omit_l1_memory_in_message(msg: Dict[str, Any], snapshot: str) -> Optional[Dict[str, Any]]:
-    """Return a replaced system message dict, or None if there was nothing to strip."""
-    content = msg.get("content")
-    if isinstance(content, str):
-        new = _strip_l1_memory_block(content, snapshot)
-        return {**msg, "content": new} if new != content else None
-    if isinstance(content, list):
-        changed = False
-        new_parts: List[Any] = []
-        for part in content:
-            if isinstance(part, dict) and isinstance(part.get("text"), str):
-                new_text = _strip_l1_memory_block(part["text"], snapshot)
-                if new_text != part["text"]:
-                    new_parts.append({**part, "text": new_text})
-                    changed = True
-                    continue
-            new_parts.append(part)
-        return {**msg, "content": new_parts} if changed else None
-    return None
-
-
-def _strip_l1_memory_from_api_messages(agent: Any, api_messages: Any) -> bool:
-    """Rewrite system rows on the per-call copy only — never canonical history or disk."""
-    if not isinstance(api_messages, list):
-        return False
-    snapshot = _l1_memory_snapshot(agent)
-    changed = False
-    for i, msg in enumerate(api_messages):
-        if not isinstance(msg, dict) or msg.get("role") != "system":
-            continue
-        replaced = _omit_l1_memory_in_message(msg, snapshot)
-        if replaced is None:
-            continue
-        api_messages[i] = replaced
-        changed = True
-    return changed
-
-
-def _recover_content_exists_risk_memory(
-    agent: Any, api_error: Exception, classified: Any, _retry: TurnRetryState, api_messages: Any,
-) -> bool:
-    """One-shot: DeepSeek Content Exists Risk is usually L1 MEMORY.md, not the user turn.
-
-    Retry the same call with MEMORY.md omitted from the system prompt. USER.md and
-    conversation history stay. If the filter still fires, fall through to fallback/abort.
-    """
-    if _retry.content_exists_risk_memory_retry_attempted:
-        return False
-    if not _is_content_exists_risk(api_error, classified):
-        return False
-    _retry.content_exists_risk_memory_retry_attempted = True
-    if not _strip_l1_memory_from_api_messages(agent, api_messages):
-        logger.info(
-            "%sContent Exists Risk recovery: no L1 MEMORY.md block in the payload; surfacing original error.",
-            agent.log_prefix,
-        )
-        return False
-    _vlines(
-        agent,
-        "⚠️  Provider content filter rejected L1 MEMORY.md — omitted it for this request and retrying...",
-    )
-    logger.warning(
-        "%sContent Exists Risk recovery: omitted L1 MEMORY.md from the retry payload",
-        agent.log_prefix,
-    )
-    return True
 
 
 def _failed_turn_result(final_response: str, messages: Any, api_call_count: int, error: str) -> dict[str, Any]:
@@ -954,9 +859,15 @@ def limit_reset_epoch(agent: Any, api_error: Exception) -> Optional[float]:
         return None
 
 
-def _stamp_limit_reset(result: dict[str, Any], agent: Any, api_error: Exception) -> None:
+# Responses for other failures can still carry rate-limit headers; a reset time only explains a limit.
+_LIMIT_REASONS = frozenset({FailoverReason.rate_limit, FailoverReason.upstream_rate_limit, FailoverReason.billing})
+
+
+def _stamp_limit_reset(result: dict[str, Any], agent: Any, api_error: Exception, classified: Any) -> None:
     """``failure_resets_at`` for structured clients (Desktop card: "Limit resets at HH:mm") and the
     same sentence appended to the chat text every plain surface (CLI/TUI/gateway) renders (#98852)."""
+    if classified.reason not in _LIMIT_REASONS:
+        return
     resets_at = limit_reset_epoch(agent, api_error)
     if resets_at is None:
         return
@@ -969,6 +880,8 @@ def _print_nonretryable_auth_guidance(
     agent: Any, classified: Any, *, status_code: Optional[int], provider: Any, base_url: Any, model: Any,
 ) -> None:
     """Actionable guidance for a terminal auth / billing error."""
+    if (getattr(classified, "error_context", None) or {}).get("usage_window"):
+        return  # a plan limit's refusal line and limit panel are its guidance: no second copy, no portal fetch
     from agent.conversation_loop import _print_billing_or_entitlement_guidance, _print_nous_entitlement_guidance
 
     if classified.reason == FailoverReason.billing and _print_billing_or_entitlement_guidance(
@@ -1120,7 +1033,9 @@ def nonretryable_client_error_result(
     the retry trace, print auth / billing / content-policy / TLS guidance, persist (skipped
     for likely context-overflow 400s so the failure does not grow the session), build result."""
     # Result/guidance helpers stay in the loop module (tests import + patch them there).
-    from agent.conversation_loop import _billing_failure_result, _content_policy_blocked_result
+    from agent.conversation_loop import (
+        _billing_failure_result, _content_policy_blocked_result, _usage_window_refusal,
+    )
 
     if api_kwargs is not None:
         agent._dump_api_request_debug(api_kwargs, reason="non_retryable_client_error", error=api_error)
@@ -1207,6 +1122,7 @@ def nonretryable_client_error_result(
         return _billing_failure_result(
             classified=classified, summary=_nonretryable_summary, messages=messages,
             api_call_count=api_call_count, provider=provider, base_url=base_url, model=model,
+            usage_window=_usage_window_refusal(agent, classified, api_messages),
         )
     if _welcome_hint:
         # A free-tier refusal is fully explained by its own sentence; the raw provider summary
@@ -1231,7 +1147,7 @@ def nonretryable_client_error_result(
     })
     if _keep_partial:
         result["partial"] = True
-    _stamp_limit_reset(result, agent, api_error)
+    _stamp_limit_reset(result, agent, api_error, classified)
     if _welcome_hint and (_kind := _welcome_surface_kind(classified)):
         # The card form: the desktop renders the sign-in as a button, so no "To sign in" tail.
         _stamp_free_tier(result, _kind,
@@ -1278,8 +1194,10 @@ def max_retries_exhausted_result(
             capability="model access", provider=provider, base_url=str(base_url), model=model,
             unverified=classified.billing_unverified,
         )
-        _billing_guidance = _billing_or_entitlement_message(**_billing_kw)
-        _print_billing_or_entitlement_guidance(agent, **_billing_kw)
+        # A plan limit (usage-window 402) carries its own refusal line: no portal fetch, no second copy.
+        if not (classified.error_context or {}).get("usage_window"):
+            _billing_guidance = _billing_or_entitlement_message(**_billing_kw)
+            _print_billing_or_entitlement_guidance(agent, **_billing_kw)
     elif is_rate_limited:
         _reset = reset_hint(api_error)
         agent._emit_diagnostic_status(
@@ -1378,7 +1296,7 @@ def max_retries_exhausted_result(
     if _keep_partial:
         result["final_response"] = _final_response
         result["partial"] = True
-    _stamp_limit_reset(result, agent, api_error)
+    _stamp_limit_reset(result, agent, api_error, classified)
     if _free_tier_kind:
         _stamp_free_tier(result, _free_tier_kind, (
             _welcome_tier_guidance(classified, model=model, in_chat=True, door=False)
@@ -2017,7 +1935,7 @@ def route_classified_error(
     _should_fallback = (
         (is_rate_limited and _wrapped_output_cap_budget is None)
         or (_is_transport_failure and retry_count >= 2)
-    )
+    ) and not (getattr(classified, "error_context", None) or {}).get("usage_window")  # never switch models on a plan limit
     if _should_fallback and agent._fallback_index < len(agent._fallback_chain):
         # No eager fallback while credential pool rotation may recover. Exception: an
         # upstream-aggregator 429 — the pool can't help, always fall back.

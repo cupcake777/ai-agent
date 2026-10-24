@@ -22,7 +22,7 @@ from email.parser import BytesHeaderParser
 from email.utils import formatdate, parseaddr
 from email import encoders
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 from urllib.parse import urlparse
 
 from agent.async_utils import safe_schedule_threadsafe
@@ -458,6 +458,7 @@ def _attach_file(msg: MIMEMultipart, path: Path, filename: str) -> None:
 
 class EmailAdapter(BasePlatformAdapter):
     """Email gateway adapter using IMAP (receive) and SMTP (send)."""
+    serial_receive_loop = True  # the IMAP poll loop awaits each message before dispatching the next
     # One email carries the whole body, so cron delivery hands over the full payload untruncated.
     splits_long_messages = True
 
@@ -914,7 +915,7 @@ class EmailAdapter(BasePlatformAdapter):
 
     def _send_via_resend(
         self, to_addr: str, body: str, reply_to_msg_id: Optional[str] = None,
-        *, files: Optional[List[Tuple[Path, str]]] = None, lenient: bool = False,
+        *, files: Optional[list[tuple[Path, str]]] = None, lenient: bool = False,
     ) -> str:
         """Send text and optional attachments through Resend while retaining IMAP inbound."""
         from urllib import error as urllib_error
@@ -925,10 +926,10 @@ class EmailAdapter(BasePlatformAdapter):
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"
         original_msg_id = reply_to_msg_id or ctx.get("message_id")
-        headers: Dict[str, str] = {}
+        headers: dict[str, str] = {}
         if original_msg_id:
             headers.update({"In-Reply-To": original_msg_id, "References": original_msg_id})
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "from": self._address, "to": [to_addr], "subject": subject, "text": body,
         }
         if headers:

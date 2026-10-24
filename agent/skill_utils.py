@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import sys
+import threading
 from pathlib import Path, PurePath
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -192,11 +193,19 @@ def skill_matches_apps(frontmatter: dict[str, Any]) -> bool:
 
 
 _RAW_CONFIG_CACHE: dict[tuple[str, bytes], dict[str, Any]] = {}
+# A multiplexed watcher rotates through up to ~32 published profile/project scopes plus
+# the ambient one (#141610), so a miss must not drop the whole cache — only a stale
+# signature entry. The bound retires entries a config's own edits leave behind.
+_RAW_CONFIG_CACHE_MAX = 128
+# Guards every cache read/publish/evict: concurrent tool threads share it, and an unlocked
+# ``pop(next(iter(...)))`` races another thread's insert (RuntimeError) or pop (KeyError).
+_RAW_CONFIG_CACHE_LOCK = threading.Lock()
 
 
 def _raw_config_cache_clear() -> None:
     """Test hook — drop the shared raw config cache."""
-    _RAW_CONFIG_CACHE.clear()
+    with _RAW_CONFIG_CACHE_LOCK:
+        _RAW_CONFIG_CACHE.clear()
 
 
 def _config_cache_key(config_path: Path) -> Optional[tuple[str, int, int, int, int]]:
@@ -228,7 +237,8 @@ def _load_raw_config() -> dict[str, Any]:
     except Exception as e:
         logger.debug("Could not read skill config %s: %s", config_path, e)
         return {}
-    cached = _RAW_CONFIG_CACHE.get(cache_key)
+    with _RAW_CONFIG_CACHE_LOCK:
+        cached = _RAW_CONFIG_CACHE.get(cache_key)
     if cached is not None:
         return cached
     try:
@@ -238,8 +248,10 @@ def _load_raw_config() -> dict[str, Any]:
         return {}
     if not isinstance(parsed, dict):
         return {}
-    _RAW_CONFIG_CACHE.clear()
-    _RAW_CONFIG_CACHE[cache_key] = parsed
+    with _RAW_CONFIG_CACHE_LOCK:
+        _RAW_CONFIG_CACHE[cache_key] = parsed
+        while len(_RAW_CONFIG_CACHE) > _RAW_CONFIG_CACHE_MAX:
+            _RAW_CONFIG_CACHE.pop(next(iter(_RAW_CONFIG_CACHE)))
     return parsed
 
 
