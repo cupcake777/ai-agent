@@ -181,7 +181,7 @@ def test_failed_setup_never_runs_child_and_releases_handles(tmp_path, monkeypatc
         assert not marker.exists()
         threads = psutil.Process(proc.pid).threads()
         assert threads
-        kernel32 = getattr(ctypes, 'WinDLL')('kernel32', use_last_error=True)
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
         kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         kernel32.OpenThread.restype = wintypes.HANDLE
         kernel32.SuspendThread.argtypes = [wintypes.HANDLE]

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from cron.blueprint_catalog import CATALOG, blueprint_catalog_entry  # noqa: E402
+from cron.blueprint_catalog import CATALOG, blueprint_catalog_entry
 
 
 def build_index() -> list[dict[str, Any]]:

@@ -15,7 +15,7 @@ import math
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from agent.conversation_compression import COMPRESSION_RETRY_CONTEXT_REDUCED_STATUS_TEMPLATE
 from agent.fast_mode import fast_mode_unprovisioned, mark_fast_mode_unavailable
@@ -861,7 +861,7 @@ def _strip_l1_memory_block(text: str, snapshot: str = "") -> str:
     return text[:block_start] + _L1_MEMORY_OMITTED_STUB + "\n" + text[end:]
 
 
-def _omit_l1_memory_in_message(msg: Dict[str, Any], snapshot: str) -> Optional[Dict[str, Any]]:
+def _omit_l1_memory_in_message(msg: dict[str, Any], snapshot: str) -> Optional[dict[str, Any]]:
     """Return a replaced system message dict, or None if there was nothing to strip."""
     content = msg.get("content")
     if isinstance(content, str):
@@ -869,7 +869,7 @@ def _omit_l1_memory_in_message(msg: Dict[str, Any], snapshot: str) -> Optional[D
         return {**msg, "content": new} if new != content else None
     if isinstance(content, list):
         changed = False
-        new_parts: List[Any] = []
+        new_parts: list[Any] = []
         for part in content:
             if isinstance(part, dict) and isinstance(part.get("text"), str):
                 new_text = _strip_l1_memory_block(part["text"], snapshot)
