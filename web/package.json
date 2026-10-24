@@ -17,8 +17,6 @@
   "dependencies": {
     "@hermes/shared": "file:../apps/shared",
     "@nous-research/ui": "0.18.2",
-    "sanitize-html": "2.17.7",
-    "colord": "2.10.0",
     "@observablehq/plot": "0.6.17",
     "@react-three/fiber": "9.6.1",
     "@tailwindcss/vite": "4.3.3",
