@@ -9,7 +9,6 @@ runs sync httpx connects through the process-wide Happy Eyeballs racer
 
 from __future__ import annotations
 
-import functools
 import socket
 import sys
 import threading
@@ -298,7 +297,7 @@ def build_keepalive_http_client(base_url: str = "", *, async_mode: bool = False,
         async def _rewrite_openai_headers_async(request):
             _rewrite_openai_headers(request)
 
-        request_hook = _rewrite_openai_headers_async if async_mode else _rewrite_openai_headers
+        request_hooks = [_rewrite_openai_headers_async if async_mode else _rewrite_openai_headers]
         proxy = _get_proxy_for_base_url(base_url)
         limits = httpx.Limits(max_keepalive_connections=20, max_connections=100, keepalive_expiry=20.0)
         timeout = httpx.Timeout(connect=15.0, read=None, write=15.0, pool=10.0)  # read=None for SSE streaming
@@ -309,7 +308,8 @@ def build_keepalive_http_client(base_url: str = "", *, async_mode: bool = False,
         from agent.codex_headers import codex_request_compression_hooks
         hooks = codex_request_compression_hooks(base_url, async_mode=async_mode)
         if hooks:
-            client_cls = functools.partial(client_cls, event_hooks=hooks)
+            request_hooks += hooks["request"]
+        event_hooks = {"request": request_hooks}
         if proxy is None:
             happy_eyeballs = not async_mode and _uses_codex_cloud_transport(base_url)
             # One pool serves every agent in the process, so its ceiling must cover a whole
@@ -339,11 +339,11 @@ def build_keepalive_http_client(base_url: str = "", *, async_mode: bool = False,
                 # direct transport (pool + SSL context) per client.
                 return client_cls(
                     limits=limits, timeout=timeout, transport=mounts["https://"],
-                    mounts=mounts, event_hooks={"request": [request_hook]},
+                    mounts=mounts, event_hooks=event_hooks,
                 )
         return client_cls(
             limits=limits, timeout=timeout, proxy=proxy, mounts=mounts or None,
-            verify=verify, event_hooks={"request": [request_hook]},
+            verify=verify, event_hooks=event_hooks,
         )
     except Exception:
         return None
