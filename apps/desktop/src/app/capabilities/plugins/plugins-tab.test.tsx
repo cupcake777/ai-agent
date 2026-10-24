@@ -8,7 +8,7 @@ import { $pluginDecisions, $pluginRecords, dropPlugin, patchPlugin, publishPlugi
 import { queryClient } from '@/lib/query-client'
 import { $agentPlugins, $agentPluginsStatus } from '@/store/agent-plugins'
 import { $confirmRequest, settleConfirm } from '@/store/confirm'
-import { $notifications } from '@/store/notifications'
+import { $notifications, clearNotifications } from '@/store/notifications'
 import { $pluginInstallRequest, closePluginInstallRequest } from '@/store/plugin-install-request'
 import { $connection, $gatewayState } from '@/store/session'
 
@@ -114,6 +114,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  // Cancels toast auto-dismiss timers: one firing after jsdom teardown throws `window is not defined`.
+  clearNotifications()
   settleConfirm(false)
   $connection.set(null)
   queryClient.clear()
