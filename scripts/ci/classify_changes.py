@@ -618,8 +618,6 @@ def classify(files: list[str], run_e2e: bool = False) -> dict[str, bool]:
     docker_meta = any(f.startswith(_DOCKER_META) for f in files)
     
     ret = {
-        "event_name": os.environ.get("EVENT_NAME", ""),
-        "site_present": os.path.isdir("website"),
         "python": python,
         "python_prod": python_prod,
         "docker_meta": docker_meta,

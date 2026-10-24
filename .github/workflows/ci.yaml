@@ -286,7 +286,9 @@ jobs:
   docs-site:
     name: Docs Site
     needs: detect
-    if: needs.detect.outputs.site == 'true'
+    # The server-only fork intentionally prunes website/. Keep the reusable
+    # workflow in sync with upstream, but do not invoke it in fork CI.
+    if: false
     uses: ./.github/workflows/docs-site-checks.yml
     with:
       commit: ${{ inputs.commit }}
@@ -337,6 +339,8 @@ jobs:
   icons-freshness-check:
     name: Icon assets freshness
     needs: detect
+    # The generator includes website assets, which this fork does not ship.
+    if: false
     uses: ./.github/workflows/icons-freshness-check.yml
     with:
       commit: ${{ inputs.commit }}
@@ -478,9 +482,11 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           RELEASE: ${{ inputs.release }}
+          SERVER_FORK: ${{ github.repository == 'cupcake777/ai-agent' }}
         run: |
           args=()
           if [ "$RELEASE" = true ]; then args+=(--release); fi
+          if [ "$SERVER_FORK" = true ]; then args+=(--server-fork); fi
           printf '%s' "$NEEDS" | python3 scripts/ci/required_results.py "${args[@]}"
 
   # ─────────────────────────────────────────────────────────────────────
