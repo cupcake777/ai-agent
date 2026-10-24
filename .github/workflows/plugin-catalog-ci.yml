@@ -59,6 +59,13 @@ jobs:
           # job's token out of .git/config where that code could read it.
           persist-credentials: false
 
+      - name: Fetch upstream main (fork only)
+        # Lets the next step recognise entries already admitted upstream; the checkout above
+        # already holds most of upstream's objects, so this is a small incremental fetch.
+        if: github.repository != 'NousResearch/hermes-agent'
+        continue-on-error: true
+        run: git fetch --no-tags https://github.com/NousResearch/hermes-agent.git "+refs/heads/main:refs/remotes/upstream/main"
+
       - name: Find changed catalog entries
         id: changed
         run: |
@@ -81,8 +88,7 @@ jobs:
 
           # Fork upstream syncs: an entry byte-identical to upstream main already passed
           # upstream's own admission gate; only entries this fork adds or edits are vetted.
-          if [ -n "$CHANGED" ] && git fetch --no-tags https://github.com/NousResearch/hermes-agent.git \
-              "+refs/heads/main:refs/remotes/upstream/main"; then
+          if [ -n "$CHANGED" ] && git rev-parse -q --verify refs/remotes/upstream/main >/dev/null; then
             FORK_ONLY=""
             while IFS= read -r entry; do
               [ -z "$entry" ] && continue
