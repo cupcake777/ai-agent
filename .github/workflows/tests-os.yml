@@ -166,6 +166,12 @@ jobs:
           # (bash 3.2 on the macOS runner: an empty array under ``set -u`` is
           # an unbound-variable error, hence the ``${arr[@]+...}`` idiom.)
           EXTRA_ARGS=()
+          # The slowed-DDL browse test's fixed 2 s post-budget margin is sized for upstream's
+          # 12-vCPU macOS runner; on the fork's 3-vCPU GitHub-hosted runner it fails every run
+          # (also at 2 workers). It is marked linux+macos and keeps running on the Linux lane.
+          if [ "${{ matrix.marker }}" = "macos" ] && [ "${RUNNER_ENVIRONMENT:-}" = "github-hosted" ]; then
+            EXTRA_ARGS+=(--deselect "tests/hermes_cli/test_browse_schema_drift.py::test_slow_browse_reconcile_gives_up_inside_its_budget_and_boot_waits_it_out")
+          fi
           if [ "${{ inputs.desktop_updater }}" != "true" ]; then
             echo "desktop_updater lane off: skipping tests/scripts/desktop_update/test_desktop_update_windows_*.py"
             EXTRA_ARGS+=(--ignore-glob='*test_desktop_update_windows_*.py')
