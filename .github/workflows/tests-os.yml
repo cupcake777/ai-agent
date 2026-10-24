@@ -88,6 +88,7 @@ jobs:
           - name: Windows-only tests
             runner: windows-latest
             marker: windows
+            timeout: 45
           - name: Windows-only tests (arm64)
             runner: windows-11-arm
             marker: windows
@@ -184,9 +185,12 @@ jobs:
             -m "platforms and not integration" \
             -v --tb=short
         env:
-          # These files spawn nested PowerShell trees. CPU-count parallelism
-          # starves cold child startup before the fixture's idle deadline.
-          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && (runner.arch == 'ARM64' && '2' || '4') || '' }}
+          # These files spawn nested PowerShell trees and time-budgeted subprocesses
+          # (watchdogs, lock waits). Upstream runs them at half the cores of a 12/32-vCPU
+          # runner; the 3-4 vCPU GitHub-hosted runners get the same headroom with 2.
+          HERMES_TEST_WORKERS: '2'
+          # One file holds several such subprocess journeys; 300 s fits a 32-vCPU runner.
+          HERMES_TEST_FILE_TIMEOUT: '600'
           HERMES_TEST_SLICE: ${{ matrix.slice || '' }}
           # Belt-and-suspenders with tests/conftest.py's env blanking: no
           # test may reach a real provider API.
