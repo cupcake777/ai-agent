@@ -42,13 +42,16 @@ jobs:
     # 3x the price because files contend for the shared machine. Separate machines
     # scale linearly. run_tests_parallel.py partitions from the checkout alone, so
     # both slices agree on the split without a planning job.
-    name: Run tests (${{ matrix.slice }}/4)
+    # This fork runs on 4-vCPU GitHub-hosted runners, where a quarter of the suite outlasts
+    # the 30-minute job cap (a slice reached ~90% at 30 min): eight slices keep each one
+    # well inside it.
+    name: Run tests (${{ matrix.slice }}/8)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        slice: [1, 2, 3, 4]
+        slice: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - name: Checkout code
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v7.0.1
@@ -112,7 +115,7 @@ jobs:
         run: |
           scripts/run_tests.sh
         env:
-          HERMES_TEST_SLICE: ${{ matrix.slice }}/4
+          HERMES_TEST_SLICE: ${{ matrix.slice }}/8
           HERMES_TEST_WORKERS: 3
           HERMES_TEST_FILE_TIMEOUT: 600
           # Ensure tests don't accidentally call real APIs

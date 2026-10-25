@@ -4,9 +4,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from agent.error_classifier import FailoverReason
-from agent.turn_recovery import (
+from agent.turn_recovery_content_risk import (
     _L1_MEMORY_OMITTED_STUB,
-    _recover_content_exists_risk_memory,
+    recover_content_exists_risk_memory,
     _strip_l1_memory_block,
     _strip_l1_memory_from_api_messages,
 )
@@ -83,11 +83,11 @@ def test_recovery_omits_memory_once_then_stops():
     err = Exception("Error code: 400 - Content Exists Risk")
     retry = TurnRetryState()
     classified = _classified()
-    assert _recover_content_exists_risk_memory(agent, err, classified, retry, api_messages) is True
+    assert recover_content_exists_risk_memory(agent, err, classified, retry, api_messages) is True
     assert retry.content_exists_risk_memory_retry_attempted is True
     assert _L1_MEMORY_OMITTED_STUB in api_messages[0]["content"]
     # Second hit must not loop.
-    assert _recover_content_exists_risk_memory(agent, err, classified, retry, api_messages) is False
+    assert recover_content_exists_risk_memory(agent, err, classified, retry, api_messages) is False
 
 
 def test_recovery_ignores_other_policy_blocks():
@@ -99,7 +99,7 @@ def test_recovery_ignores_other_policy_blocks():
         reason=FailoverReason.content_policy_blocked,
         message="This content was flagged for possible cybersecurity risk",
     )
-    assert _recover_content_exists_risk_memory(
+    assert recover_content_exists_risk_memory(
         agent, Exception("flagged for possible cybersecurity risk"), classified, retry, api_messages,
     ) is False
     assert "secret-proxy-chain" in api_messages[0]["content"]

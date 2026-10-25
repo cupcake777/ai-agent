@@ -376,9 +376,10 @@ def test_every_detect_output_a_lane_sets_is_consumed_by_some_job():
     """A lane output nothing reads is a lane that can never run anything."""
     ci = _yaml(".github/workflows/ci.yaml")
     text = json.dumps({k: v for k, v in ci["jobs"].items() if k != "detect"})
-    # python_prod's only reader is the deferred Desktop E2E job (`if: false`, see ci.yaml).
+    # python_prod's only reader is the deferred Desktop E2E job (`if: false`, see ci.yaml);
+    # site's is docs-site, which the server-only fork disables (it prunes website/).
     unread = [k for k in ci["jobs"]["detect"]["outputs"]
-              if k not in ("event_name", "python_prod") and f"needs.detect.outputs.{k}" not in text]
+              if k not in ("event_name", "python_prod", "site") and f"needs.detect.outputs.{k}" not in text]
     assert unread == []
 
 

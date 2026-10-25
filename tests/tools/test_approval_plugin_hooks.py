@@ -383,7 +383,10 @@ class TestClassicCliPromptsFireGatewayTwinHooks:
 
         assert result == approved
         assert [name for name, _ in cli_hooks] == ["pre_approval_request", "post_approval_response"]
-        expected = [(name, {**kw, "surface": cli_surface}) for name, kw in gateway_hooks]
+        # request_id/approval_id route a gateway queue entry (the fork's desktop approval
+        # bridge answers by id); the classic CLI panel has no queue, so it has none to send.
+        expected = [(name, {**{k: v for k, v in kw.items() if k not in ("request_id", "approval_id")},
+                            "surface": cli_surface}) for name, kw in gateway_hooks]
         assert cli_hooks == expected
 
     def test_protected_write_without_a_human_channel_fires_no_hooks(self, isolated_session, monkeypatch):

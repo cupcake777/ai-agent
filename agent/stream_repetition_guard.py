@@ -52,7 +52,7 @@ class StreamRepetitionGuardConfig:
     window_repeats: int = 4         # repetitions within window → halt
 
     @classmethod
-    def from_mapping(cls, data: dict | None) -> "StreamRepetitionGuardConfig":
+    def from_mapping(cls, data: dict | None) -> StreamRepetitionGuardConfig:
         if not data:
             return cls()
         return cls(

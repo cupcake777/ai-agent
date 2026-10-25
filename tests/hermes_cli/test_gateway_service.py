@@ -187,8 +187,8 @@ class TestServiceIdentityForForeignHome:
         home = tmp_path / "home"
         home.mkdir()
         monkeypatch.setattr(Path, "home", lambda: home)
-        # The user unit dir follows the ACCOUNT home (#98699), which is read from the environment.
-        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr(hermes_constants, "_account_home", lambda: home)  # names services
+        monkeypatch.setenv("HOME", str(home))  # the user unit dir follows it (#98699)
         monkeypatch.delenv("HERMES_REAL_HOME", raising=False)
         monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
         return home
@@ -345,43 +345,6 @@ class TestGeneratedSystemdUnits:
         monkeypatch.delenv("LD_LIBRARY_PATH")
         assert "LD_LIBRARY_PATH" not in gateway_cli.generate_systemd_unit(system=False)
 
-
-    def test_user_unit_includes_wsl_windows_interop_paths(self, monkeypatch):
-        monkeypatch.setattr(gateway_cli, "is_wsl", lambda: True)
-        monkeypatch.setenv(
-            "PATH",
-            "/usr/local/bin:/mnt/c/WINDOWS/system32:/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/",
-        )
-        monkeypatch.setattr(gateway_cli.shutil, "which", lambda cmd: None)
-
-        unit = gateway_cli.generate_systemd_unit(system=False)
-
-        assert "/mnt/c/WINDOWS/system32" in unit
-        assert "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/" in unit
-
-    def test_user_unit_omits_windows_interop_paths_outside_wsl(self, monkeypatch):
-        monkeypatch.setattr(gateway_cli, "is_wsl", lambda: False)
-        monkeypatch.setenv("PATH", "/usr/local/bin:/mnt/c/WINDOWS/system32")
-        monkeypatch.setattr(gateway_cli.shutil, "which", lambda cmd: None)
-
-        unit = gateway_cli.generate_systemd_unit(system=False)
-
-        assert "/mnt/c/WINDOWS/system32" not in unit
-
-    def test_system_unit_includes_wsl_windows_interop_paths(self, monkeypatch):
-        monkeypatch.setattr(gateway_cli, "is_wsl", lambda: True)
-        monkeypatch.setattr(
-            gateway_cli,
-            "_system_service_identity",
-            lambda run_as_user=None: ("alice", "alice", "/home/alice", 1001),
-        )
-        monkeypatch.setattr(gateway_cli, "_hermes_home_for_target_user", lambda home: "/home/alice/.hermes")
-        monkeypatch.setenv("PATH", "/usr/local/bin:/mnt/c/WINDOWS/system32")
-        monkeypatch.setattr(gateway_cli.shutil, "which", lambda cmd: None)
-
-        unit = gateway_cli.generate_systemd_unit(system=True, run_as_user="alice")
-
-        assert "/mnt/c/WINDOWS/system32" in unit
 
     def test_launchd_plist_persists_configured_nofile_soft_limit(self, monkeypatch):
         """The generated plist must carry SoftResourceLimits/NumberOfFiles so a

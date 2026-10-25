@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   check-common-ancestor:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       review_status: ${{ steps.merge-base-check.outputs.review_status }}
@@ -42,12 +42,15 @@ jobs:
 
       - id: merge-base-check
         name: Reject PRs with no common ancestor on main
+        env:
+          BASE_REF: ${{ github.base_ref || github.event.repository.default_branch }}
         run: |
           # `git merge-base` exits non-zero AND prints nothing when the two
           # commits share no ancestor.  We check both conditions explicitly
           # so the failure message is clear regardless of which signal fires
           # first.
-          if ! BASE=$(git merge-base origin/main HEAD 2>/dev/null) || [ -z "$BASE" ]; then
+          # The PR's own base branch: this fork has no origin/main (its default is my/main).
+          if ! BASE=$(git merge-base "origin/${BASE_REF}" HEAD 2>/dev/null) || [ -z "$BASE" ]; then
             STATUS='[{"source":"unrelated histories","results":[{"kind":"action_required","title":"Unrelated histories","summary":"This PR has no common ancestor with main.","detail":"","how_to_fix":"Rebase your changes onto current main:\n```\ngit fetch origin main\ngit checkout -b fix-branch origin/main\n# re-apply your changes (cherry-pick, copy files, etc.)\ngit push -f origin fix-branch\n```\n"}]}]'
             echo "review_status=${STATUS}" >> "$GITHUB_OUTPUT"
             echo "review_status=${STATUS}" > review-status.json

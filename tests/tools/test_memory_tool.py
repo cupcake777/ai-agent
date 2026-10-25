@@ -190,7 +190,7 @@ class TestMemoryStoreReplace:
         store.add("memory", "Python 3.11 project")
         result = store.replace("memory", "3.11", "Python 3.12 project")
         assert result["success"] is True
-        assert "[P1] Python 3.12 project" in store.memory_entries
+        assert "Python 3.12 project" in store.memory_entries
         assert "Python 3.11 project" not in store.memory_entries
 
     def test_replace_whole_entry_contract(self, store):
@@ -201,7 +201,7 @@ class TestMemoryStoreReplace:
         store.add("memory", entry)
         result = store.replace("memory", "RULE B: ci per HEAD.", "RULE B: CI is per-head.")
         assert result["success"] is True
-        assert store.memory_entries == ["[P1] RULE B: CI is per-head."]
+        assert store.memory_entries == ["RULE B: CI is per-head."]
         assert result["replaced_entry"] == entry
         # Batch surface carries the same visibility: 1-based op position -> full overwritten text.
         store.add("memory", "second entry")
@@ -232,7 +232,7 @@ class TestMemoryStoreReplace:
             assert run(store)["success"] is True
             results[surface] = store.memory_entries[0]
 
-        assert results["single"] == results["batch"] == results["replay"] == "[P1] beta fact, updated."
+        assert results["single"] == results["batch"] == results["replay"] == "beta fact, updated."
 
 
     def test_replace_ambiguous_match(self, store):
@@ -255,7 +255,7 @@ class TestMemoryStoreReplace:
         path.write_text("Deploys: Fly.io, manual approval.\n\n§\n\nHost: forge\n§\n\n§\nRepo: acme", encoding="utf-8")
         assert store.replace("memory", "Deploys:", "Deploys: Fly.io, 30m canary.")["success"] is True
         assert store.remove("memory", "Repo: acme")["success"] is True
-        assert path.read_text(encoding="utf-8") == "[P1] Deploys: Fly.io, 30m canary.\n§\nHost: forge"
+        assert path.read_text(encoding="utf-8") == "Deploys: Fly.io, 30m canary.\n§\nHost: forge"
         assert not list(path.parent.glob("MEMORY.md.bak.*"))
         store.add("memory", 'User runs a fleet (\u201cOmarchy\u201d \u2014 Trinity)')
         store.add("memory", "Tests: run \u2018make test\u2019 (needs\n  docker up)")
@@ -266,8 +266,8 @@ class TestMemoryStoreReplace:
         assert store.remove("memory", "\u201c \u2014")["success"] is False
         assert store.apply_batch("memory", [{"action": "remove", "old_text": "\u201c \u2014"}])["success"] is False
         assert "No entry matched" in store.replace("memory", "fleet 'on-prem'", "x")["error"]
-        assert store.memory_entries == ["[P1] Deploys: Fly.io, 30m canary.", "Host: forge", "[P1] fleet (Zeus hub)",
-                                        "[P1] Tests: make test-fast", 'Literal sequence " - inside a note']
+        assert store.memory_entries == ["Deploys: Fly.io, 30m canary.", "Host: forge", "fleet (Zeus hub)",
+                                        "Tests: make test-fast", 'Literal sequence " - inside a note']
 
     def test_failures_name_the_fix(self, store):
         """A refused write names the fix: the chars to free, and for an old_text that matches
@@ -282,7 +282,7 @@ class TestMemoryStoreReplace:
         assert "current_entries" not in miss  # batch aborts still never echo the store (#97316)
         result = json.loads(memory_tool(action="patch", old_text="Deploys go through GitHub Actions to Fly.io with manual approval.",
                                         content="", new_text="Deploys: Fly.io.", store=store))
-        assert result["success"] is True and "[P1] Deploys: Fly.io." in store.memory_entries
+        assert result["success"] is True and "Deploys: Fly.io." in store.memory_entries
 
 
 
@@ -539,7 +539,7 @@ class TestMemoryToolDispatcher:
             memory_tool(action="patch", old_text="fact A", new_text="fact A refined", store=store)
         )
         assert result["success"] is True
-        assert "[P1] fact A refined" in store.memory_entries
+        assert "fact A refined" in store.memory_entries
         assert "fact A" not in [e for e in store.memory_entries if e == "fact A"]
 
     def test_new_text_alias_for_content_on_add(self, store):
@@ -591,7 +591,7 @@ class TestMemoryBatch:
             store=store,
         ))
         assert result["success"] is True
-        assert "[P1] updated entry" in store.memory_entries
+        assert "updated entry" in store.memory_entries
         assert "batched via new_text" in store.memory_entries
         assert "old entry" not in store.memory_entries
 
@@ -1046,4 +1046,4 @@ class TestBackgroundReviewDeleteGate:
             reset_review_attended(att)
             reset_current_write_origin(token)
         assert result["success"] is True
-        assert "[P1] rewritten by refine" in store._entries_for("memory")
+        assert "rewritten by refine" in store._entries_for("memory")

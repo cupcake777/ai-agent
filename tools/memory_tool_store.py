@@ -23,9 +23,6 @@ MEMORY_BLOCK_HEADERS = {
     "memory": "MEMORY (your personal notes)", "user": "USER PROFILE (who the user is)"}
 
 ENTRY_DELIMITER = "\n§\n"
-PRIORITY_RE = re.compile(r"^\[P([0-3])\]\s*")
-DEFAULT_PRIORITY = 0
-MAX_PRIORITY = 3
 
 
 def _scan_memory_content(content: str) -> Optional[str]:
@@ -203,21 +200,6 @@ class MemoryStore:
     def reset_consolidation_failures(self) -> None:
         """Call at turn start."""
         self._consolidation_failures = 0
-
-    @staticmethod
-    def _parse_priority(entry: str) -> int:
-        match = PRIORITY_RE.match(entry)
-        return int(match.group(1)) if match else DEFAULT_PRIORITY
-
-    @staticmethod
-    def _set_priority(entry: str, priority: int) -> str:
-        priority = max(DEFAULT_PRIORITY, min(int(priority), MAX_PRIORITY))
-        stripped = PRIORITY_RE.sub("", entry).strip()
-        return stripped if priority == DEFAULT_PRIORITY else f"[P{priority}] {stripped}"
-
-    def _autoboost_priority(self, old_entry: str, new_content: str) -> str:
-        return self._set_priority(new_content, max(self._parse_priority(new_content),
-                                                   min(self._parse_priority(old_entry) + 1, MAX_PRIORITY), 1))
 
     def _consolidation_failure(self, response: dict[str, Any]) -> dict[str, Any]:
         """Count a consolidation failure: under the per-turn cap return ``response``
@@ -445,8 +427,6 @@ class MemoryStore:
             after, message, failure_class = _patch_entry(before, old_text, new_text)
             if after is None:
                 return _error(message, failure_class)
-            if old_text == before:
-                after = self._autoboost_priority(before, after)
             patched = entries[:idx] + [after] + entries[idx + 1:]
             new_total = len(ENTRY_DELIMITER.join(patched))
             if new_total > limit:
@@ -496,8 +476,7 @@ class MemoryStore:
             idx = self._locate(entries, old_text, "replace" if new_content else "remove", matched_entry)
             if isinstance(idx, dict):
                 return idx
-            replacement = None if new_content is None else self._autoboost_priority(entries[idx], new_content)
-            replaced = entries[:idx] + ([] if replacement is None else [replacement]) + entries[idx + 1:]
+            replaced = entries[:idx] + ([] if new_content is None else [new_content]) + entries[idx + 1:]
             if new_content is None:
                 return replaced, "Entry removed.", {"removed_entry": entries[idx]}
             new_total = len(ENTRY_DELIMITER.join(replaced))
@@ -509,7 +488,8 @@ class MemoryStore:
             return replaced, "Entry replaced.", {"replaced_entry": entries[idx]}
         return self._mutate(target, _apply)
 
-    def _apply_batch_op(self, working: list[str], act: str, content: str, old_text: str, pos: str,
+    @staticmethod
+    def _apply_batch_op(working: list[str], act: str, content: str, old_text: str, pos: str,
                         matched_entry: Optional[str] = None) -> tuple[Optional[str], Any, str, Optional[str]]:
         """Apply one batch op to *working*; return ``(error message, previous content, failure class,
         patched entry)`` — on a zero-match error the second value is that op's ``closest_entries``
@@ -548,14 +528,11 @@ class MemoryStore:
                 return f"{pos}: {miss['error']}", miss.get("closest_entries"), "no_match", None
         previous_content = working[idx]
         if act != "patch":
-            working[idx:idx + 1] = ([self._autoboost_priority(working[idx], content)]
-                                    if act == "replace" else [])
+            working[idx:idx + 1] = [content] if act == "replace" else []
             return None, previous_content, "none", None
         patched, message, failure_class = _patch_entry(previous_content, old_text, content)
         if patched is None:
             return f"{pos}: {message}", None, failure_class, None
-        if old_text == previous_content:
-            patched = self._autoboost_priority(previous_content, patched)
         working[idx:idx + 1] = [patched]
         return None, previous_content, "none", patched
 

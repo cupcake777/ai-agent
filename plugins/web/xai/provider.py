@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from plugins.web._common import BaseWebSearchProvider, search_fail as _fail, search_ok, setup_schema, title_hit as _row
 from tools.xai_http import has_xai_credentials, hermes_xai_user_agent, resolve_xai_http_credentials
@@ -27,12 +27,12 @@ _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}", re.MULTILINE)
 _URL_RE = re.compile(r"https?://[^\s<>\]\)\"']+")
 
 
-def _configured_mode(cfg: Dict[str, Any]) -> str:
+def _configured_mode(cfg: dict[str, Any]) -> str:
     mode = cfg.get("mode") if isinstance(cfg.get("mode"), str) else "responses"
     return mode.strip().lower() or "responses"
 
 
-def _resolve_custom_chat_credentials(provider_name: str) -> Dict[str, str]:
+def _resolve_custom_chat_credentials(provider_name: str) -> dict[str, str]:
     pool_key = str(provider_name or DEFAULT_CUSTOM_PROVIDER).strip().lower()
     if not pool_key.startswith("custom:"):
         pool_key = f"custom:{pool_key}"
@@ -141,8 +141,8 @@ class XAIWebSearchProvider(BaseWebSearchProvider):
         return search_ok(self._extract_results(data, limit=limit))
 
     def _chat_completions_search(
-        self, query: str, limit: int, cfg: Dict[str, Any], model: str,
-    ) -> Dict[str, Any]:
+        self, query: str, limit: int, cfg: dict[str, Any], model: str,
+    ) -> dict[str, Any]:
         provider_name = cfg.get("provider") or DEFAULT_CUSTOM_PROVIDER
         creds = _resolve_custom_chat_credentials(provider_name)
         api_key, base_url = creds.get("api_key", ""), creds.get("base_url", "")
@@ -197,7 +197,7 @@ class XAIWebSearchProvider(BaseWebSearchProvider):
                 return ""
         raw = getattr(resp, "content", b"")
         text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
-        parts: List[str] = []
+        parts: list[str] = []
         for line in text.splitlines():
             if not line.strip().startswith("data:"):
                 continue
@@ -215,11 +215,11 @@ class XAIWebSearchProvider(BaseWebSearchProvider):
         return "".join(parts).strip()
 
     @classmethod
-    def _chat_results_from_text(cls, text: str, *, limit: int) -> List[Dict[str, Any]]:
+    def _chat_results_from_text(cls, text: str, *, limit: int) -> list[dict[str, Any]]:
         if parsed := cls._try_parse_json_results(text, limit=limit):
             return parsed
         seen: set[str] = set()
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         lines = text.splitlines()
         for index, line in enumerate(lines):
             for raw_url in _URL_RE.findall(line):

@@ -448,6 +448,7 @@ def test_child_collection_cannot_read_live_hermes_home(tmp_path: Path) -> None:
         stderr=subprocess.STDOUT,
         text=True,
         timeout=60,
+        check=False,
     )
 
     assert proc.returncode == 0, proc.stdout

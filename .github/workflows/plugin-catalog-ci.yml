@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   structural:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a  # v1
@@ -44,7 +44,7 @@ jobs:
           python3 scripts/validate_plugin_catalog.py plugin-catalog/
 
   pinned-source-validate:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a  # v1
@@ -58,6 +58,13 @@ jobs:
           # `hermes plugins validate` below runs pinned-repo code; keep the
           # job's token out of .git/config where that code could read it.
           persist-credentials: false
+
+      - name: Fetch upstream main (fork only)
+        # Lets the next step recognise entries already admitted upstream; the checkout above
+        # already holds most of upstream's objects, so this is a small incremental fetch.
+        if: github.repository != 'NousResearch/hermes-agent'
+        continue-on-error: true
+        run: git fetch --no-tags https://github.com/NousResearch/hermes-agent.git "+refs/heads/main:refs/remotes/upstream/main"
 
       - name: Find changed catalog entries
         id: changed
@@ -78,6 +85,19 @@ jobs:
           # The grep can only shrink the list and runs on its own so a git diff
           # failure still fails the step instead of looking like "no changes".
           CHANGED=$(printf '%s' "$CHANGED" | grep -v '/removed\.yaml$' || true)
+
+          # Fork upstream syncs: an entry byte-identical to upstream main already passed
+          # upstream's own admission gate; only entries this fork adds or edits are vetted.
+          if [ -n "$CHANGED" ] && git rev-parse -q --verify refs/remotes/upstream/main >/dev/null; then
+            FORK_ONLY=""
+            while IFS= read -r entry; do
+              [ -z "$entry" ] && continue
+              if ! git diff --quiet refs/remotes/upstream/main HEAD -- "$entry"; then
+                FORK_ONLY="${FORK_ONLY}${entry}"$'\n'
+              fi
+            done <<< "$CHANGED"
+            CHANGED=$(printf '%s' "$FORK_ONLY" | sed '/^$/d')
+          fi
 
           if [ -n "$CHANGED" ]; then
             # Admission PRs must be data-only: the gate's own enforcement code
