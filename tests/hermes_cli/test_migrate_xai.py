@@ -202,16 +202,17 @@ class TestUnreadableExistingConfig:
         # chmod(000) is still readable by root, which is how containerized CI
         # and the canonical fork gate often run.  Inject the same OS-level read
         # failure at the guard instead so the contract is user-independent.
+        # The guard reads through read_config_doc (re-exported from
+        # hermes_cli.config_backend); patching module-level open() here no
+        # longer intercepts anything since the reader moved out of this module.
         import hermes_cli.config as config_module
 
-        real_open = open
+        def deny_config_read(*_args, **_kwargs):
+            raise PermissionError("simulated unreadable config")
 
-        def deny_config_read(path, mode="r", *args, **kwargs):
-            if Path(path) == trap_config and "r" in mode:
-                raise PermissionError("simulated unreadable config")
-            return real_open(path, mode, *args, **kwargs)
-
-        monkeypatch.setattr(config_module, "open", deny_config_read, raising=False)
+        monkeypatch.setattr(
+            config_module, "read_config_doc", deny_config_read, raising=False
+        )
         with pytest.raises(RuntimeError, match="cannot be read"):
             apply_migration(trap_config, issues, backup=False)
 
