@@ -24,7 +24,7 @@ def _answer_while_waiting(monkeypatch, *, with_outcome, **resolve_kwargs):
     settled: list[tuple] = []
     monkeypatch.setattr(wait_mod._ctx, "_fire_approval_hook", lambda name, **kw: hooks.append((name, kw)))
 
-    def answered(event, session_key, *, interrupt_log):
+    def answered(event, session_key, *, interrupt_log, timeout_s=None):
         request_id = mod.list_gateway_approvals(session_key)[0]["request_id"]
         assert mod.register_gateway_settle(session_key, request_id, lambda *args: settled.append(args),
                                            with_outcome=with_outcome)
