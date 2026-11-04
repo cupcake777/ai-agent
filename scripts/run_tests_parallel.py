@@ -63,6 +63,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 # "skipped on this host" note and the lanes can never disagree.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.ci.list_os_marked_tests import gated_specs, spec_hosts
+from scripts.run_tests_launch import start_pytest
 
 
 def _sweep_killed_run_roots(root: str) -> None:
@@ -110,14 +111,7 @@ def _runner_scratch_root() -> str:
 
 
 def _make_attempt_temp_roots() -> tuple[tempfile.TemporaryDirectory[str], str]:
-    """Create one disk-backed root containing both pytest tmp files and Hermes home.
-
-    The parent process may itself run with TMPDIR under its live Hermes home.  Creating
-    the child home with an unqualified TemporaryDirectory would then put test I/O back
-    under that protected tree before the child's isolated TMPDIR is even installed.
-    Nesting both directories under the runner-owned root keeps collection-time reads
-    isolated and lets one recursive cleanup remove the whole attempt.
-    """
+    """Create an isolated Hermes home inside the runner-owned attempt root."""
     temproot = tempfile.mkdtemp(prefix="r-", dir=_runner_scratch_root())
     try:
         hermes_home = tempfile.TemporaryDirectory(prefix="hermes-test-home-", dir=temproot)
@@ -128,7 +122,7 @@ def _make_attempt_temp_roots() -> tuple[tempfile.TemporaryDirectory[str], str]:
 
 
 def _default_worker_count() -> int:
-    """Return a CPU-safe default; explicit env/CLI overrides still win."""
+    """Return a CPU-safe default while preserving an explicit override."""
     configured = os.environ.get("HERMES_TEST_WORKERS")
     if configured:
         return max(1, int(configured))
@@ -655,17 +649,14 @@ def _run_one_file_once(
     file_timeout: float,
 ) -> tuple[Path, int, str, dict[str, int], float]:
     """Single attempt of a per-file pytest subprocess (see _run_one_file)."""
-    cmd = [sys.executable, "-m", "pytest", str(file), *pytest_args]
 
-    # Collection imports modules before the autouse fixture can redirect the
-    # home. Isolate it here so tests never read a developer's live profile.
-    # Create it under the same disk-backed per-attempt root as pytest's temp
-    # files; the runner itself may inherit TMPDIR from inside the live Hermes
-    # home, which the home I/O guard must continue to protect.
+    # Collection imports modules before conftest fixtures can redirect the
+    # home. Keep both HERMES_HOME and pytest's temp files under one disk-backed
+    # per-attempt root so no child can read the live profile.
     hermes_home, temproot = _make_attempt_temp_roots()
-    child_env = os.environ.copy()
-    child_env["HERMES_HOME"] = hermes_home.name
-    child_env["HERMES_TEST_SANDBOX_HOME"] = hermes_home.name
+    env = os.environ.copy()
+    env["HERMES_HOME"] = hermes_home.name
+    env["HERMES_TEST_SANDBOX_HOME"] = hermes_home.name
 
     # Give this subprocess its own pytest temp root.
     #
@@ -683,37 +674,13 @@ def _run_one_file_once(
     #
     # One root for each subprocess removes the shared directory that the race
     # needs. The parent deletes the root after the attempt.
-    child_env["PYTEST_DEBUG_TEMPROOT"] = temproot
+    env["PYTEST_DEBUG_TEMPROOT"] = temproot
     # Every tempfile.* call inside the test process lands in the same per-run root, so the
     # parent's cleanup of ``temproot`` removes them too instead of leaving them in /tmp.
-    child_env["TMPDIR"] = temproot
+    env["TMPDIR"] = temproot
 
     subproc_start = time.monotonic()
-    # launch the pytest process
-    proc = subprocess.Popen(
-        cmd,
-        cwd=repo_root,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True, encoding="utf-8", errors="replace",
-        env=child_env,
-        # POSIX: place the child at the head of its own process group so
-        # _kill_tree can SIGKILL the group atomically.
-        # Windows: this maps to CREATE_NEW_PROCESS_GROUP in CPython 3.12+;
-        # _kill_tree handles the Windows path via taskkill /F /T.
-        start_new_session=True,
-    )
-
-    # Capture the pgid NOW, before the leader can exit and be reaped. Once
-    # the leader is reaped, os.getpgid(proc.pid) raises ProcessLookupError
-    # even though grandchildren in that group are still alive — defeating
-    # the whole cleanup. None on Windows where the pgid concept doesn't apply.
-    pgid: int | None = None
-    if sys.platform != "win32":
-        try:
-            pgid = os.getpgid(proc.pid)
-        except (ProcessLookupError, PermissionError):
-            pgid = None
+    proc, pgid = start_pytest(file, pytest_args, repo_root, env, _runner_scratch_root())
 
     try:
         output, _ = proc.communicate(timeout=file_timeout)
@@ -741,8 +708,6 @@ def _run_one_file_once(
 
         output +=  "\n"
     finally:
-        # Kill anything the child left running under the temp root before the
-        # directories go away, so a detached straggler can't race the rmtree.
         _kill_detached_leftovers(temproot)
         hermes_home.cleanup()
         # Delete the temp root for this attempt. Nothing reads it after the
@@ -753,6 +718,10 @@ def _run_one_file_once(
 
     if rc not in (0, 5) and not output.strip():
         output = f"pytest child exited {rc} (0x{rc & 0xffffffff:08x}) with no output: {file}\n"
+    elif rc > 1 and rc not in (5, 124):
+        # A file can pass every test and still exit non-zero; without the
+        # status the failure dump shows only a green pytest summary.
+        output += f"(pytest child exit status {rc})\n"
 
     if rc == 5:
         # No tests collected in THIS file — legitimate per-file: a
@@ -992,6 +961,14 @@ def _save_durations(
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+#: Estimate for a file with no cached duration (roughly the P50 from profiling).
+_DEFAULT_FILE_DURATION = 2.0
+
+
+def _estimated_duration(file: Path, durations: dict[str, float], repo_root: Path) -> float:
+    return float(durations.get(_format_file(file, repo_root), _DEFAULT_FILE_DURATION))
+
+
 def _compute_lpt_slices(
     files: list[Path],
     slice_count: int,
@@ -1004,8 +981,7 @@ def _compute_lpt_slices(
     file to the slice with the smallest accumulated time so far. This
     minimizes the makespan (max slice duration) and keeps CI jobs balanced.
 
-    Files with no cached duration get a default estimate of 2.0s (roughly
-    the P50 from profiling). This means first-time runs (no cache) still
+    Files with no cached duration get _DEFAULT_FILE_DURATION. This means first-time runs (no cache) still
     get reasonable distribution, and new files don't all land in one slice.
 
     Returns a list of N file-lists, one per slice (0-indexed).
@@ -1013,11 +989,9 @@ def _compute_lpt_slices(
     if slice_count < 2:
         return [files]
 
-    default_dur = 2.0
     file_durs: list[tuple[Path, float]] = []
     for f in files:
-        rel = _format_file(f, repo_root)
-        dur = durations.get(rel, default_dur)
+        dur = _estimated_duration(f, durations, repo_root)
         file_durs.append((f, dur))
 
     # Sort longest first (LPT).
@@ -1034,6 +1008,22 @@ def _compute_lpt_slices(
         bucket_totals[min_idx] += dur
 
     return bucket_files
+
+
+def _longest_first(
+    files: list[Path], durations: dict[str, float], repo_root: Path
+) -> list[Path]:
+    """Order files for submission: slowest cached duration first.
+
+    The pool starts files in submission order, so a slow file submitted late
+    runs alone at the end while the other workers sit idle. Starting the slow
+    ones first leaves only short files for the tail. Files without a cached
+    duration get _DEFAULT_FILE_DURATION. Ties keep their original order, so an
+    empty cache leaves the order unchanged.
+    """
+    if not durations:
+        return files  # skip a path resolve per file when there is nothing to sort by
+    return sorted(files, key=lambda f: -_estimated_duration(f, durations, repo_root))
 
 
 def _slice_files(
@@ -1065,13 +1055,9 @@ def _slice_files(
     bucket_files = _compute_lpt_slices(sorted(files), slice_count, {}, repo_root)
 
     target = bucket_files[slice_index - 1]
-    target_dur = sum(
-        durations.get(_format_file(f, repo_root), 2.0) for f in target
-    )
+    target_dur = sum(_estimated_duration(f, durations, repo_root) for f in target)
     total_dur = sum(
-        durations.get(_format_file(f, repo_root), 2.0)
-        for bucket in bucket_files
-        for f in bucket
+        _estimated_duration(f, durations, repo_root) for bucket in bucket_files for f in bucket
     )
     print(
         f"Slice {slice_index}/{slice_count}: {len(target)} files "
@@ -1674,7 +1660,7 @@ def main() -> int:
         # CI load (see _effective_file_timeout).
         timeout_durations = _load_durations(repo_root)
         futures: list[Future] = []
-        for file in files:
+        for file in _longest_first(files, timeout_durations, repo_root):
             t0 = time.monotonic()
             fut = pool.submit(
                 _run_one_file, file, pytest_passthrough, repo_root,
