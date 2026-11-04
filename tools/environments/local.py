@@ -36,6 +36,45 @@ _IS_WINDOWS = platform.system() == "Windows"
 
 logger = logging.getLogger(__name__)
 
+
+def _isolate_gateway_foreground_command(
+        args: list[str], run_env: dict[str, str]) -> tuple[list[str], dict[str, str], str | None]:
+    """Move a gateway terminal command into the existing bounded worker scope.
+
+    Background terminal processes already use this isolation in process_registry;
+    foreground commands must use the same path or pytest/Node/LSP descendants can
+    exhaust the gateway cgroup and take the messaging control plane down with them.
+    """
+    if _IS_WINDOWS:
+        return args, run_env, None
+    try:
+        from tools.process_registry import (
+            restart_safe_gateway_child_argv,
+            systemd_user_bus_env,
+        )
+        if os.environ.get("_HERMES_GATEWAY") != "1" or not os.environ.get("HERMES_SUPERVISED_CHILD"):
+            return args, run_env, None
+        suffix = f"terminal-{os.getpid()}-{threading.get_ident()}-{time.time_ns():x}"
+        dispatch = restart_safe_gateway_child_argv(
+            args,
+            unit_suffix=suffix,
+            require_restart_safe_scope=False,
+            # Tool execution runs in a gateway descendant, not the PID-file-owning
+            # gateway process itself. It still shares the service cgroup and must
+            # be moved out before launching memory-heavy descendants.
+            outlives_parent=True,
+        )
+        if dispatch.mode != "scoped":
+            return args, run_env, None
+        return (
+            dispatch.argv,
+            systemd_user_bus_env(run_env),
+            f"hermes-worker-{suffix}.scope",
+        )
+    except Exception as exc:
+        logger.warning("Could not isolate foreground terminal command from gateway cgroup: %s", exc)
+        return args, run_env, None
+
 # --- Terminal temp-cache pruning ---
 # get_temp_dir() defaults to HERMES_HOME/cache/terminal (real storage, not tmpfs), so
 # stale artifacts don't vanish on reboot: the gateway housekeeping loop prunes hourly
@@ -1141,6 +1180,7 @@ class LocalEnvironment(BaseEnvironment):
             cmd_string = _append_dropped_path_entries(cmd_string, run_env.get("PATH", ""))
             cmd_string = _prepend_shell_init(cmd_string, _resolve_shell_init_files())
         args = [bash, *(["-l"] if login else []), "-c", cmd_string]
+        args, run_env, systemd_unit = _isolate_gateway_foreground_command(args, run_env)
         self._recover_cwd()
         # Not spawn_owned: an awaited command needs no spawn-ledger entry; own_process_groups below hands
         # its group to the owner-death supervisor and _wait_for_process releases it.
@@ -1151,6 +1191,7 @@ class LocalEnvironment(BaseEnvironment):
             # detached-spawn: ok — owned via own_process_groups right below
             start_new_session=True, cwd=self.cwd,
             **({"creationflags": windows_hide_flags()} if _IS_WINDOWS else {}))
+        proc._hermes_systemd_unit = systemd_unit
         if not _IS_WINDOWS:
             # The command dies with this process however it dies: a SIGKILLed / OOM-killed host left a
             # running `npm run dev` or `sleep` on init. Released once the wait returns (see below).
@@ -1182,6 +1223,10 @@ class LocalEnvironment(BaseEnvironment):
 
     def _kill_process(self, proc):
         """Kill the entire process group (all children)."""
+        if unit := getattr(proc, "_hermes_systemd_unit", None):
+            with contextlib.suppress(Exception):
+                from tools.process_registry import _stop_systemd_unit
+                _stop_systemd_unit(unit)
         try:
             (_kill_process_windows if _IS_WINDOWS else _kill_process_group_posix)(proc)
         except OSError:  # ProcessLookupError / PermissionError included
