@@ -40,7 +40,7 @@ on:
         default: false
   pull_request:
   push:
-    branches: [main]
+    branches: [main, my/main]
 
 permissions:
   contents: read
