@@ -84,7 +84,11 @@ async def _post_settle_notice(
         ctx, command: str, card_message_id: Optional[str], notice: str, reason: str = "") -> None:
     from gateway.run import _interim_metadata
 
+    from gateway.bot_peer_notices import automatic_notices_allowed
+
     adapter = ctx._status_adapter
+    if not automatic_notices_allowed(getattr(ctx, "source", None)):
+        return
     metadata = _interim_metadata(ctx._status_thread_metadata)
     try:
         # Plain markdown, not the card's platform markup: ``edit_message`` re-formats it itself.
