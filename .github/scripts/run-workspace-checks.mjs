@@ -14,7 +14,9 @@
 // their lines, and a failure is then hard to read.
 //
 // This also runs on a laptop: `node .github/scripts/run-workspace-checks.mjs`.
-// `--concurrency N` sets the limit. `--list` prints the units and exits.
+// `--concurrency N` sets the limit. HERMES_JS_CHECK_CONCURRENCY supplies the
+// default when a constrained CI runner needs to cap top-level units without
+// bypassing the just recipe. `--list` prints the units and exits.
 
 import { execFileSync, spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
@@ -98,10 +100,14 @@ async function main() {
   }
 
   const flagIdx = argv.indexOf('--concurrency')
-  const concurrency = Math.max(
-    1,
-    flagIdx !== -1 ? Number(argv[flagIdx + 1]) : Math.min(units.length, availableParallelism()),
-  )
+  const configured =
+    flagIdx !== -1 ? argv[flagIdx + 1] : process.env.HERMES_JS_CHECK_CONCURRENCY
+  const requested = configured === undefined ? availableParallelism() : Number(configured)
+  if (!Number.isInteger(requested) || requested < 1) {
+    console.error('::error::workspace-check concurrency must be a positive integer')
+    process.exit(2)
+  }
+  const concurrency = Math.min(units.length, requested)
 
   console.log(`running ${units.length} checks, up to ${concurrency} at a time:`)
   for (const u of units) console.log(`  ${u.pkg} :: ${u.script}`)

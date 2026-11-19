@@ -22,6 +22,10 @@ def _steps():
     return YAML(typ="base").load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["check"]["steps"]
 
 
+def _job():
+    return YAML(typ="base").load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["check"]
+
+
 def _cached_trees(steps) -> list[str]:
     restore = next(step for step in steps if step.get("id") == "node-modules-cache")
     return [line.strip() for line in restore["with"]["path"].splitlines() if line.strip()]
@@ -51,3 +55,13 @@ def test_restored_trees_lose_their_vitest_history_before_any_check(tmp_path):
         # Installed packages and other Vite caches are what the cache is for.
         assert (tmp_path / tree / "left-pad/package.json").is_file(), tree
         assert (tmp_path / tree / ".vite/deps/_metadata.json").is_file(), tree
+
+
+def test_hosted_runner_serializes_top_level_workspace_checks():
+    job = _job()
+    run = next(step for step in job["steps"] if step.get("name") == "Run all workspace checks")
+
+    assert job["runs-on"] == "ubuntu-latest"
+    assert int(job["timeout-minutes"]) >= 60
+    assert run["run"] == "just check-js-ci"
+    assert run["env"]["HERMES_JS_CHECK_CONCURRENCY"] == "1"

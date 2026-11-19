@@ -12,15 +12,13 @@ on:
 jobs:
   check:
     name: JS & TS checks
-    # One 32-core job replaces a 14-leg matrix. The matrix spread about 612s
-    # of check payload over 4-core runners. It paid about 371s of repeated
-    # setup to do it: 14 checkouts, 14 node installs, 14 node_modules
-    # restores.
-    #
-    # One larger runner installs one time. vitest, tsc and eslint each size
-    # their own worker pool from the core count.
+    # Keep one job so the large node_modules tree is restored only once. This
+    # fork runs on a GitHub-hosted 4-vCPU runner, not upstream's 32-vCPU runner:
+    # each vitest/tsc/eslint unit already sizes its own pool from those cores,
+    # so starting several units together oversubscribes the runner and can make
+    # none of them finish before the job timeout.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a  # v7.0.1
         with:
@@ -135,6 +133,9 @@ jobs:
       # not an empty run, because an empty run reports green after it checks
       # nothing.
       - name: Run all workspace checks
+        env:
+          # One top-level unit at a time; the unit itself may use all 4 vCPUs.
+          HERMES_JS_CHECK_CONCURRENCY: '1'
         run: just check-js-ci
       - name: Check the checkout is clean
         # Last step of every job (tests/ci/test_clean_worktree_check.py): a test or CI step that
