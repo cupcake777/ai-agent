@@ -43,10 +43,12 @@ jobs:
     # scale linearly. run_tests_parallel.py partitions from the checkout alone, so
     # every slice agrees on the split without a planning job.
     # This fork uses GitHub-hosted 4-vCPU runners; eight slices keep each job
-    # within the 30-minute cap without relying on Blacksmith capacity.
+    # within a 45-minute cap without relying on Blacksmith capacity. The fifth
+    # slice has reached 29m32s in the test step alone, so 30 minutes left no
+    # room for setup or normal hosted-runner variance.
     name: Run tests (${{ matrix.slice }}/8)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
