@@ -139,7 +139,6 @@ def test_failed_config_migration_is_owed_and_later_maintenance_runs(tmp_path, mo
                  "_print_bundled_skills_sync_report", "_sync_profiles_after_update"):
         monkeypatch.setattr(maint, name, lambda name=name: calls.append(name))
     monkeypatch.setattr("hermes_cli.gitlock.fetch_full_commit_graph", lambda *a, **kw: False)
-    monkeypatch.setattr("hermes_cli.model_catalog.seed_cache_from_checkout", lambda root: False)
 
     def broken_graph_refresh(root):
         calls.append(("commit_graph", root))

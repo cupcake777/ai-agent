@@ -4,7 +4,7 @@ import { queryOptions, useQuery } from '@tanstack/react-query'
 import { CATALOG_ORIGIN } from '@/lib/plugin-catalog'
 import { queryClient } from '@/lib/query-client'
 
-import { curatedFeaturedRank, curationOwnsArtwork, officialCatalogArtwork } from './catalog-curation'
+import { curatedFeaturedRank } from './catalog-curation'
 
 export type CatalogKind = 'skills' | 'plugins'
 
@@ -103,7 +103,7 @@ function catalogLinks(kind: CatalogKind, row: any, rawName: string, source: stri
     sourceUrl: webUrl(row.repo || row.sourceUrl),
     docsUrl:
       webUrl(row.docsUrl) || (text(row.docsPath) ? `${CATALOG_ORIGIN}/docs/user-guide/skills/${text(row.docsPath)}` : null),
-    imageUrl: curationOwnsArtwork(kind, row) ? officialCatalogArtwork(kind, row) : catalogImageUrl(row.image),
+    imageUrl: catalogImageUrl(row.image),
     screenshots:
       kind === 'plugins'
         ? strings(row.screenshots)

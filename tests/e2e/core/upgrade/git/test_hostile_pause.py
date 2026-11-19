@@ -547,16 +547,30 @@ def test_desktop_handoff_update_pauses_and_restarts_through_the_same_path(w):
 
 def test_failed_move_restarts_exactly_the_paused_set_on_the_old_code(w):
     w.reset_clean()
-    blocked = w.checkout / "website"
-    assert blocked.is_dir(), "premise: website/ is tracked"
-    target = w.publish("release: e2e hostile pause i", {"website/e2e-hostile-pause-i.txt": "release i\n"})
+    blocked = w.checkout / "contributors"
+    assert blocked.is_dir(), "premise: contributors/ is tracked"
+    target = w.publish(
+        "release: e2e hostile pause i",
+        {"contributors/e2e-hostile-pause-i.txt": "release i\n"},
+    )
 
     def failing_update(host):
-        blocked.chmod(0o555)
+        # The suite runs as root, so directory permissions cannot reliably make Git fail. Intercept
+        # the principal fast-forward in the sandbox's existing git shim instead: this fails after
+        # the pause/commit point is armed but before Git can write the checkout or move HEAD.
+        shim = w.sb.root / "wrap" / "git"
+        original = shim.read_text(encoding="utf-8-sig")
+        first, sep, rest = original.partition("\n")
+        assert sep, "premise: the sandbox git shim has no shebang line"
+        injected = (
+            f'case " $* " in *" merge --ff-only {target} "*) '
+            'echo "e2e: refusing principal checkout move" >&2; exit 74;; esac\n'
+        )
+        shim.write_text(first + "\n" + injected + rest, encoding="utf-8")
         try:
             return _ns_cli(host, w, "update", "--yes", "--branch", "main", timeout=UPDATE_TIMEOUT)
         finally:
-            blocked.chmod(0o755)
+            shim.write_text(original, encoding="utf-8")
 
     with _namespace(w) as host:
         before = _start_gateway(host, w, "i")

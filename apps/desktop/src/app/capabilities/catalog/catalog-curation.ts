@@ -2,16 +2,7 @@ import { isOfficialSkillSource } from '@hermes/shared'
 
 import curation from '../../../../../shared/src/catalog-curation.json'
 
-const { artwork, featured } = curation
-
-const images = import.meta.glob<string>('../../../../../../website/static/img/catalog/*.jpg', {
-  eager: true,
-  import: 'default',
-  query: '?url'
-})
-
-const artworkUrl = (filename: string | undefined) =>
-  filename ? images[`../../../../../../website/static/img/catalog/${filename}`] ?? null : null
+const { featured } = curation
 
 interface CurationRow {
   name?: string
@@ -19,21 +10,6 @@ interface CurationRow {
   identifier?: string
   source?: string
   tier?: string
-}
-
-/** Official identities whose art the curation file owns: a reassignment there
- *  must win over a feed published with the old mapping. */
-export function curationOwnsArtwork(kind: 'skills' | 'plugins', row: CurationRow): boolean {
-  return kind === 'skills' ? isOfficialSkillSource(row.source) : row.tier === 'bundled'
-}
-
-/** Only first-party catalog identities receive editorial artwork. */
-export function officialCatalogArtwork(kind: 'skills' | 'plugins', row: CurationRow): string | null {
-  if (!curationOwnsArtwork(kind, row)) {return null}
-
-  return kind === 'skills'
-    ? artworkUrl((artwork.skills as Record<string, string>)[`${row.category}/${row.name}`])
-    : artworkUrl((artwork.plugins as Record<string, string>)[row.identifier ?? ''])
 }
 
 /** Curated hero rank from the bundled curation file, for feeds published before

@@ -13,10 +13,13 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def _pytest(tmp_path: Path, *args: str, **env: str) -> tuple[subprocess.CompletedProcess, Path]:
     artifact = tmp_path / "accounting.json"
+    sandbox = tmp_path / "nested-hermes-home"
+    sandbox.mkdir()
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-o", "addopts=", "-p", "no:cacheprovider", *args],
         cwd=ROOT, capture_output=True, text=True, timeout=300, check=False,
-        env={**os.environ, "HERMES_CONTRACT_ACCOUNTING": str(artifact), **env},
+        env={**os.environ, "HERMES_HOME": str(sandbox), "HERMES_TEST_SANDBOX_HOME": str(sandbox),
+             "HERMES_CONTRACT_ACCOUNTING": str(artifact), **env},
     )
     return result, artifact
 

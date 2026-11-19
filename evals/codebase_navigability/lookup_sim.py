@@ -26,7 +26,7 @@ import statistics
 import sys
 from pathlib import Path
 
-SKIP_TOP = {".git", "node_modules", "apps", "website", "build", ".venv", "venv", "MagicMock", "__pycache__", ".worktrees", "dist", "evals", "skills", "optional-skills", "docs", "tests"}
+SKIP_TOP = {".git", "node_modules", "apps", "build", ".venv", "venv", "MagicMock", "__pycache__", ".worktrees", "dist", "evals", "skills", "optional-skills", "docs", "tests"}
 WINDOW = 2000          # read_file's default max lines per call
 FIRST_READ = 200       # a careful agent's first targeted read around the grep hit (override: --first-read)
 MARGIN = 5             # lines of context above the grep hit

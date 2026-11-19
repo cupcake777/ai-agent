@@ -636,7 +636,7 @@ def test_sibling_pr_allowance_admits_only_named_pending_consumers(monkeypatch, t
 
 # -- ownership: the update entry points' real imports ---------------------------------------
 
-_SKIP_DIRS = {".git", ".venv", "venv", "node_modules", ".worktrees", "tests", "website", "__pycache__"}
+_SKIP_DIRS = {".git", ".venv", "venv", "node_modules", ".worktrees", "tests", "__pycache__"}
 
 
 def _product_python() -> list[Path]:

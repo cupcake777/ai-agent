@@ -377,22 +377,9 @@ def get_default_model_from_cache(provider: str) -> str | None:
 
 
 def seed_cache_from_checkout(project_root: Path | str) -> bool:
-    """Overwrite the disk cache with the checkout's ``website/static/api/model-catalog.json``.
-    After ``hermes update`` that file IS the newest catalog, so the picker stays current even when
-    the remote fetch is bot-gated. Validated, then written via the same atomic writer."""
-    src = Path(project_root) / "website" / "static" / "api" / "model-catalog.json"
-    try:
-        with open(src, encoding="utf-8-sig") as fh:
-            data = json.load(fh)
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.debug("model catalog seed from checkout skipped (%s): %s", src, exc)
-        return False
-    if not _validate_manifest(data):
-        logger.debug("model catalog seed from checkout skipped: invalid manifest at %s", src)
-        return False
-    _write_disk_cache(data)
-    reset_cache()  # drop the in-process copy so the next read picks up the seed
-    return True
+    """Retained updater compatibility hook; this fork has no local website catalog seed."""
+    del project_root
+    return False
 
 
 def reset_cache() -> None:

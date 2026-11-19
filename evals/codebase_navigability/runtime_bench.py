@@ -32,7 +32,7 @@ results = {"label": LABEL, "tree": TREE, "reps": REPS}
 warm_pyc()
 pyc_bytes = 0; pyc_n = 0
 for dp, dns, fns in os.walk(TREE):
-    if any(s in dp for s in ("/node_modules", "/apps/", "/.git", "/tests", "/website", "/build", "/venv")): dns[:] = []; continue
+    if any(s in dp for s in ("/node_modules", "/apps/", "/.git", "/tests", "/build", "/venv")): dns[:] = []; continue
     for f in fns:
         if f.endswith(".pyc"): pyc_bytes += os.path.getsize(os.path.join(dp, f)); pyc_n += 1
 results["pyc_files"] = pyc_n; results["pyc_bytes"] = pyc_bytes

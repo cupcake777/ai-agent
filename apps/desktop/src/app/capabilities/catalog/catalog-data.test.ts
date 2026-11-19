@@ -139,6 +139,18 @@ describe('public catalog data', () => {
     expect(http.imageUrl).toBeNull()
   })
 
+  it('uses feed artwork for official entries when the checkout has no website assets', () => {
+    const [entry] = parseCatalog('skills', [{
+      name: 'hermes-agent',
+      identifier: 'official/hermes-agent',
+      source: 'official',
+      category: 'autonomous-ai-agents',
+      image: 'https://raw.githubusercontent.com/NousResearch/hermes-agent/main/artwork.jpg'
+    }])
+
+    expect(entry.imageUrl).toBe('https://raw.githubusercontent.com/NousResearch/hermes-agent/main/artwork.jpg')
+  })
+
   it('rejects a non-catalog response instead of treating an error payload as an empty catalog', () => {
     expect(() => parseCatalog('skills', { error: 'Service unavailable' })).toThrow('Invalid catalog response')
   })

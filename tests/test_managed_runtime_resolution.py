@@ -61,7 +61,6 @@ _EXEMPT_DIRS = (
     "optional-skills",
     "scripts",
     "evals",
-    "website",
     "node_modules",
     ".build",
     ".cache",

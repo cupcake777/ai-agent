@@ -15,6 +15,7 @@ test('the real wrapper builds and checks native icon artifacts in an independent
     expect(generateIcons(args, { env })).toBe(0)
     const png = fs.readFileSync(path.join(out, 'apps/desktop/assets/icon.png'))
     expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    expect(fs.existsSync(path.join(out, 'website'))).toBe(false)
     expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([1024, 1024])
     expect(generateIcons([...args, '--check'], { env })).toBe(0)
     expect(env.PYTHONPATH).toBe(path.join(out, 'foreign-site'))

@@ -4,7 +4,6 @@
  *
  * Generated icons are NOT committed (see scripts/generate_icons.py) — every
  * consuming pipeline regenerates them before building:
- *   - website:  website/scripts/prebuild.mjs (docusaurus prebuild)
  *   - desktop:  apps/desktop/package.json prebuild + predev
  *   - installer: apps/bootstrap-installer/package.json prebuild
  *   - web:       web/package.json prebuild

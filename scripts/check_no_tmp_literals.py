@@ -70,9 +70,6 @@ SKIP_DIRS = {
 }
 # Pruned only directly under the repo root.
 ROOT_SKIP_DIRS = {".github"}
-# Pruned as repo-relative paths.
-SKIP_REL_DIRS = {Path("website/i18n"), Path("website/build"), Path("website/node_modules")}
-
 SKIP_FILE_NAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "uv.lock", "poetry.lock"}
 SKIP_FILE_PATTERNS = (
     re.compile(r"^test_.*\.py$"),
@@ -183,11 +180,8 @@ def iter_files(root: Path | None = None):
     ignored = _git_ignored(root)
     for dirpath, dirnames, filenames in os.walk(root):
         here = Path(dirpath)
-        rel_here = here.relative_to(root) if here != root else Path()
         excluded = SKIP_DIRS | (ROOT_SKIP_DIRS if here == root else set())
-        dirnames[:] = sorted(
-            d for d in dirnames if d not in excluded and (rel_here / d) not in SKIP_REL_DIRS
-        )
+        dirnames[:] = sorted(d for d in dirnames if d not in excluded)
         for filename in sorted(filenames):
             path = here / filename
             if path not in ignored and not _skip_file(path):
@@ -219,10 +213,7 @@ def scan(paths=None, root: Path | None = None) -> dict[str, list[tuple[int, str]
 
 # Files that carried literal /tmp paths when this check landed, with their hit counts.
 # Burn-down list: fix or mark, then delete the entry. Regenerate with --print-baseline.
-_BASELINE: dict[str, int] = {
-    # a tree listing inside a fenced code block; an inline marker would render on the page
-    "website/docs/getting-started/nix-setup.md": 1,
-}
+_BASELINE: dict[str, int] = {}
 
 
 def _format_baseline(hits: dict[str, list]) -> str:

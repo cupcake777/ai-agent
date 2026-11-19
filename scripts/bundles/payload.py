@@ -25,7 +25,7 @@ if str(ROOT) not in sys.path:
 # not packaged, not compiled, not baked. Frontend product staging
 # (scripts/bundles/stage.py) needs its full tree and passes no exclusions.
 INERT_SNAPSHOT_DIRS = (
-    "tests", "tests-js", "website", "evals", ".github", "nix", "docker",
+    "tests", "tests-js", "evals", ".github", "nix", "docker",
     "apps", "ui-tui", "web", "scripts",
 )
 

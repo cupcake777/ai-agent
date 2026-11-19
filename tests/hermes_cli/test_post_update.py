@@ -225,7 +225,7 @@ def test_state_db_guard_passes_valid_db(tmp_path, monkeypatch):
 
 def test_state_db_guard_uses_boot_size_ceiling(tmp_path, monkeypatch):
     """Interactive boot must not request the 2 GiB full-walk ceiling."""
-    from hermes_cli.backup import DEFAULT_INTEGRITY_CHECK_MAX_BYTES
+    from hermes_cli.backup_integrity import DEFAULT_INTEGRITY_CHECK_MAX_BYTES
 
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     (tmp_path / "state.db").write_bytes(b"x" * 200)

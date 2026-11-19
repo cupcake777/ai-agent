@@ -195,7 +195,7 @@ def test_fts_read_corruption_detected_by_read_probe(tmp_path):
     with ``database disk image is malformed`` — the exact silent-fail
     behavior reported in #66724.
     """
-    from hermes_state_repair import _db_opens_cleanly
+    from persistence.sqlite._state.repair import _db_opens_cleanly
 
     db_path = tmp_path / "state.db"
     _build_healthy_db(db_path)

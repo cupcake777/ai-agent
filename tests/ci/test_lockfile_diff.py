@@ -327,8 +327,8 @@ def test_pnpm_lock_refuses_what_it_cannot_read():
 def test_diff_refs_reports_the_pnpm_lock_and_nested_npm_locks(tmp_path):
     def commit(pnpm_lock: str, npm_lock: str) -> None:
         (tmp_path / "pnpm-lock.yaml").write_text(pnpm_lock, encoding="utf-8")
-        (tmp_path / "website").mkdir(exist_ok=True)
-        (tmp_path / "website/package-lock.json").write_text(npm_lock, encoding="utf-8")
+        (tmp_path / "nested").mkdir(exist_ok=True)
+        (tmp_path / "nested/package-lock.json").write_text(npm_lock, encoding="utf-8")
         subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True, timeout=30)
         subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
                         "commit", "-q", "--no-verify", "-m", "lock"], cwd=tmp_path, check=True, timeout=30)
@@ -338,7 +338,7 @@ def test_diff_refs_reports_the_pnpm_lock_and_nested_npm_locks(tmp_path):
     commit(PNPM_HEAD, _lock({"node_modules/react": {"version": "18.3.1"}}))
 
     diffs = _mod.diff_refs("HEAD~1", "HEAD", str(tmp_path))
-    assert set(diffs) == {"pnpm-lock.yaml", "website/package-lock.json"}
+    assert set(diffs) == {"pnpm-lock.yaml", "nested/package-lock.json"}
     md = _mod.render_markdown(diffs)
     assert "#### `pnpm-lock.yaml`" in md
     assert "| ms | `2.1.2` | `2.1.3` |" in md

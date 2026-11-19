@@ -70,12 +70,6 @@ must never skip one a change could break:
   only the flake reads them, so they skip the Python lanes and run ``nix``
   alone. ``pyproject.toml`` and ``uv.lock`` are flake inputs too, but the
   packaging tests read them, so they keep every Python lane.
-* ``website/static/oauth/`` is python-relevant too: it publishes the OAuth
-  Client ID Metadata Document that ``tests/tools/test_mcp_cimd.py`` checks
-  against the pinned callback ports in ``tools/mcp_oauth.py``.
-* ``website/docs/`` and ``website/scripts/`` are python-relevant for the same
-  reason: the docs tree generates ``llms.txt``, and
-  ``tests/website/test_generate_llms_txt.py`` asserts every page reaches it.
 * A cross-language fixture (``_SHARED_FIXTURE_CONSUMERS``) selects the test
   lanes of every consumer that reads it: the update-marker corpus runs pytest,
   cargo, vitest and the Windows hand-off tests, not only ``python``; the plugin

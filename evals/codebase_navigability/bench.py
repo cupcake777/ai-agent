@@ -30,7 +30,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-SKIP_TOP = {".git", "node_modules", "apps", "website", "build", ".venv", "venv", "MagicMock", "__pycache__",
+SKIP_TOP = {".git", "node_modules", "apps", "build", ".venv", "venv", "MagicMock", "__pycache__",
             ".worktrees", "dist", "evals", "skills", "optional-skills", "docs", "tests"}
 FIRST_PARTY_HINT = None  # resolved from the tree: any top-level .py or package dir
 

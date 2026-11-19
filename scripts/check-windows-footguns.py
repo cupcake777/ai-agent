@@ -84,7 +84,6 @@ EXCLUDED_DIRS = {
     ".mypy_cache",
     ".pytest_cache",
     "site-packages",
-    "website/build",
     "optional-skills",  # external skills
 }
 
