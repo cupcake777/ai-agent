@@ -2,22 +2,18 @@
 
 Every turn's drain reads the session's pending admissions before its claim (and re-reads the head
 after an awaited preclaim check). On slow storage that read used to stop the whole owner loop, every
-other session's turn, Stop and socket included. Real SessionAuthority + state.db; reads are slowed
-only for the session under test and only while the drain claims, and the stall is measured as
-loop-tick lag. The claim still takes the head the read validated.
+other session's turn, Stop and socket included. Real SessionAuthority + state.db; the read blocks on
+a threading event that only the owner loop can release, proving the loop remains runnable without a
+wall-clock scheduling threshold. The claim still takes the head the read validated.
 """
 import asyncio
 import threading
-import time
 from types import SimpleNamespace
 
 import pytest
 
 from tests.fixtures.storage_seed import seed_session
 from tests.gateway.fixtures.storage_handles import close_storage_handles, storage_handle
-
-SLOW_S = 2.0
-
 
 @pytest.mark.asyncio
 async def test_claim_pending_read_keeps_the_owner_loop_ticking(tmp_path, monkeypatch):
@@ -32,30 +28,31 @@ async def test_claim_pending_read_keeps_the_owner_loop_ticking(tmp_path, monkeyp
     row, _ = db.admissions.admit(epoch=authority.epoch, principal_id='u', session_id='s',
                                  request_id='r1', payload={'text': 'x'})
     real, slow = SQLiteAdmissionRepository.list, threading.Event()
+    read_entered, release_read = threading.Event(), threading.Event()
 
     def slow_list(*args, **kwargs):
         if slow.is_set():
-            time.sleep(SLOW_S)  # health: allow HX013 -- the slow storage read IS the stall under test
+            read_entered.set()
+            # The event loop must release this worker. If the read regresses onto that loop, the
+            # handshake cannot complete; the timeout is only a deadlock guard, not a performance bar.
+            assert release_read.wait(30), 'owner loop could not run while the claim read was pending'
         return real(*args, **kwargs)
     monkeypatch.setattr(SQLiteAdmissionRepository, 'list', slow_list)
-    gaps = []
 
-    async def tick():
-        last = time.monotonic()
-        while True:
-            await asyncio.sleep(0.02)  # health: allow HX013 -- the ticker's period is the owner-loop stall measurement
-            now = time.monotonic()
-            gaps.append(now - last)
-            last = now
-    ticker = asyncio.create_task(tick())
-    await asyncio.sleep(0.05)  # health: allow HX013 -- the ticker runs before the claim starts
+    async def release_from_owner_loop():
+        while not read_entered.is_set():
+            await asyncio.sleep(0)
+        release_read.set()
+
     slow.set()
+    releaser = asyncio.create_task(release_from_owner_loop())
     try:
-        claimed, first = await asyncio.wait_for(authority._claim_next(SessionRef('p', 's'), live), 30)
+        claimed, first = await asyncio.wait_for(authority._claim_next(SessionRef('p', 's'), live), 35)
+        await releaser
     finally:
         slow.clear()
-        ticker.cancel()
+        release_read.set()
+        releaser.cancel()
         db.close()
     assert first['admission_id'] == row.admission_id
     assert claimed and claimed['admission_id'] == row.admission_id and claimed['status'] == 'started'
-    assert max(gaps) < 0.2, f'owner loop stalled {max(gaps):.2f}s behind the claim read'

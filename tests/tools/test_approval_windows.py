@@ -226,9 +226,11 @@ class TestPowerShellPositionalScriptAndAbbreviatedSwitches:
         "\n ssh -x" * 3000,
     ])
     def test_repeated_launcher_words_scan_in_linear_time(self, command):
-        start = time.perf_counter()
+        # Current-thread CPU time measures scanner work without treating hosted-runner descheduling
+        # as a regex regression. Wall time made this test fail under otherwise-correct CI contention.
+        start = time.thread_time()
         assert not _is_dangerous(command)
-        assert time.perf_counter() - start < 2, command[:30]
+        assert time.thread_time() - start < 2, command[:30]
 
 
 class TestDriveLetterRoots:
