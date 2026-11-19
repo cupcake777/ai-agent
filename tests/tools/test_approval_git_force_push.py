@@ -122,6 +122,6 @@ def test_a_run_inside_the_push_segment_does_not_backtrack_exponentially(unit):
     """Overlapping push-argument alternatives used to re-split a `>&>&...` run 2**n ways."""
     import time
 
-    start = time.monotonic()
+    start = time.thread_time()
     assert detect_dangerous_command("git push origin main " + unit * 200) == (False, None, None)
-    assert time.monotonic() - start < 2
+    assert time.thread_time() - start < 2

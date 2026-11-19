@@ -115,9 +115,9 @@ def test_dev_socket_redirect_scan_is_linear_on_a_long_digit_run():
     code = """
 import time
 from tools.approval_detection import _DevSocketRedirectMatcher
-started = time.perf_counter()
+started = time.thread_time()
 assert _DevSocketRedirectMatcher().search("cat /dev/ " + "1" * 50_000 + " x ; true") is None
-assert time.perf_counter() - started < 2.0
+assert time.thread_time() - started < 2.0
 """
     subprocess.run([sys.executable, "-c", code], check=True, timeout=20, cwd=repo_root,
                    env={**os.environ, "PYTHONPATH": repo_root})

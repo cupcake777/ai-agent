@@ -101,10 +101,10 @@ def test_a_run_of_global_options_is_scanned_linearly(option):
     """Overlapping option alternatives used to re-split a long option run exponentially."""
     import time
 
-    start = time.monotonic()
+    start = time.thread_time()
     assert not detect_dangerous_command("git " + (option + " ") * 60 + "x")[0]
     assert detect_dangerous_command("git " + (option + " ") * 60 + "reset --hard")[0]
-    assert time.monotonic() - start < 2
+    assert time.thread_time() - start < 2
 
 
 def test_options_outside_the_value_list_still_reach_the_subcommand():
@@ -112,14 +112,14 @@ def test_options_outside_the_value_list_still_reach_the_subcommand():
     expose the verb, and stay linear when no verb follows."""
     import time
 
-    start = time.monotonic()
+    start = time.thread_time()
     run = "--opt val --flag=x -q - " * 58
     assert detect_dangerous_command(f"git {run}-C /tmp/r push --force origin x")[0]
     for prefix in ("git", "git -C /tmp/r", "git --git-dir=/tmp/r/.git"):
         for bulk in ("--exclude " * 58, "--opt val " * 58, "--opt=val " * 58,
                      "-C'/tmp/a b' -c 'k=v' " * 58, "-C /a\\ b\\ c -c k=v\\ w " * 58, "-C " + "$(pwd)" * 58 + " "):
             assert not detect_dangerous_command(f"{prefix} {bulk}log --oneline")[0], prefix
-    assert time.monotonic() - start < 2
+    assert time.thread_time() - start < 2
 
 
 @pytest.mark.parametrize("value", ["$(" * 30000, "$(a " * 25000, "$(" + "(a)" * 30000, "$(" + "((a)" * 25000])
@@ -134,10 +134,10 @@ def test_an_unclosed_nested_substitution_is_scanned_linearly(value):
 
     rules = [re.compile(p, re.IGNORECASE) for p, _ in DANGEROUS_PATTERNS if isinstance(p, str) and _GIT in p]
     assert rules
-    start = time.monotonic()
+    start = time.thread_time()
     for rule in rules:
         assert not rule.search(f"git -C {value} log --oneline")
-    assert time.monotonic() - start < 2
+    assert time.thread_time() - start < 2
 
 
 @pytest.mark.parametrize("prefix, unit", [("", "git -c "), ("", "git push "), ("git push ", "-c git ")])
@@ -145,6 +145,6 @@ def test_a_repeated_git_word_does_not_rescan_the_rest(prefix, unit):
     """Each `git` word starts a new search; an uncapped option run or push scan made this quadratic."""
     import time
 
-    start = time.monotonic()
+    start = time.thread_time()
     assert not detect_dangerous_command(prefix + unit * 3000 + "x;")[0]
-    assert time.monotonic() - start < 2
+    assert time.thread_time() - start < 2

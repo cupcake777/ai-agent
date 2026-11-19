@@ -135,9 +135,9 @@ class TestCreateAndLinkIntoSensitivePaths:
 
     def test_trailing_redirect_scan_is_linear(self):
         # A `(\s*[<>]\S+)*` redirect tail backtracks polynomially on `>a>a>…` (n=24: seconds).
-        start = time.monotonic()
+        start = time.thread_time()
         detect_dangerous_command("ln -s x ~/.bashrc >" + "a>" * 24 + "a q")
-        assert time.monotonic() - start < 1.0
+        assert time.thread_time() - start < 1.0
 
 
 class TestQuotedHomePrefixHardline:
@@ -213,9 +213,9 @@ class TestQuotedHomePrefixHardline:
     def test_quoted_collapse_tail_scans_in_linear_time(self, command):
         from tools.approval import detect_hardline_command
 
-        start = time.monotonic()
+        start = time.thread_time()
         assert detect_hardline_command(command) == (False, None)
-        assert time.monotonic() - start < 2.0, command[:30]
+        assert time.thread_time() - start < 2.0, command[:30]
 
 
 class TestFileToolShellRcGate:

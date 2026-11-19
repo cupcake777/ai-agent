@@ -112,17 +112,17 @@ def test_repeated_verb_words_stay_linear(home):
     # The unanchored store rules rescanned from every repeated verb word (quadratic); anchored at a
     # command position they are tried only at command starts.
     command = "sqlite3 " * 8000 + home + "/state.db;x"
-    started = time.monotonic()
+    started = time.thread_time()
     detect_dangerous_command(command)
-    assert time.monotonic() - started < 6
+    assert time.thread_time() - started < 6
 
 
 def test_repeated_heredoc_lines_stay_linear(home):
     # The heredoc clause must not let the verb lookahead cross newlines (quadratic per line).
     command = "sqlite3 ~/.hermes/state.db <<E\n" * 1990
-    started = time.monotonic()
+    started = time.thread_time()
     assert detect_dangerous_command(command)[0] is True
-    assert time.monotonic() - started < 6
+    assert time.thread_time() - started < 6
 
 
 @pytest.mark.parametrize("template", (

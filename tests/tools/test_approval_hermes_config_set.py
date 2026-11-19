@@ -125,7 +125,7 @@ def test_a_long_global_option_run_stays_linear():
     measured 0.34s per pattern at 30 flags and doubled every 2 more, and this rule is scanned
     on every terminal command."""
     command = "hermes " + " ".join(["--flag=value"] * 40) + " config set approvals.mode off"
-    start = time.perf_counter()
+    start = time.thread_time()
     detect_dangerous_command(command)
-    elapsed = time.perf_counter() - start
+    elapsed = time.thread_time() - start
     assert elapsed < 2.0, f"detection took {elapsed:.3f}s for a 40-flag run"

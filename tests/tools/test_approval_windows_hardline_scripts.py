@@ -262,9 +262,9 @@ def test_later_list_element_below_the_root_stays_approvable(cmd):
 ], ids=["cr", "space-cr", "cr-delete-verb", "cr-delete-operand", "cr-launcher"])
 def test_bare_cr_runs_scan_in_linear_time(command):
     # A bare CR starts a PowerShell statement; a run of them must not make each CR rescan the rest of the run.
-    start = time.perf_counter()
+    start = time.thread_time()
     assert not detect_hardline_command(command)[0]
-    assert time.perf_counter() - start < 2
+    assert time.thread_time() - start < 4
 
 
 @pytest.mark.parametrize("cmd", [

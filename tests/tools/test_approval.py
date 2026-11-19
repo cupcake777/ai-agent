@@ -1212,10 +1212,10 @@ class TestQuotedCommandWordVariants:
 
     def test_many_quoted_command_words_stay_bounded_in_both_passes(self):
         cmd = "\n".join(f'"key{i}": "line {i} with some text"' for i in range(460))
-        start = time.monotonic()
+        start = time.thread_time()
         assert detect_hardline_command(cmd) == (False, None)
         assert detect_dangerous_command(cmd) == (False, None, None)
-        elapsed = time.monotonic() - start
+        elapsed = time.thread_time() - start
         assert elapsed < 5.0, f"detection took {elapsed:.2f}s for a {len(cmd)}-char command"
 
     def test_obfuscated_command_words_still_detected_when_merged_into_one_variant(self):

@@ -83,6 +83,6 @@ def test_delimiter_flags_of_other_commands_are_not_uploads(command):
 
 def test_many_delimiter_flags_in_one_long_command_stay_fast():
     command = "cut " + " ".join(['-d"$SECRET_SEP"'] * 3000) + " f; true"
-    started = time.monotonic()
+    started = time.thread_time()
     assert detect_dangerous_command(command)[0] is False
-    assert time.monotonic() - started < 10
+    assert time.thread_time() - started < 10

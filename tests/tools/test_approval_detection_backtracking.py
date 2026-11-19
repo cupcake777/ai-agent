@@ -28,9 +28,9 @@ import time
 from tools.approval_detection import detect_dangerous_command
 detect_dangerous_command("ls")
 for reps in (28, 64, 512):
-    started = time.perf_counter()
+    started = time.thread_time()
     detect_dangerous_command("cat .env" + ".x" * reps)
-    assert time.perf_counter() - started < 3.0, reps
+    assert time.thread_time() - started < 3.0, reps
 ''')
 
 
@@ -69,9 +69,9 @@ import time
 from tools.approval_detection import detect_dangerous_command, _PARSER_LIMIT_DESCRIPTION
 for depth in (33, 240, 2000):
     command = "echo " + "$(" * depth + "x" + ")" * depth
-    started = time.perf_counter()
+    started = time.thread_time()
     assert detect_dangerous_command(command)[1] == _PARSER_LIMIT_DESCRIPTION, depth
-    assert time.perf_counter() - started < 3.0, depth
+    assert time.thread_time() - started < 3.0, depth
 ''')
 
 
@@ -86,9 +86,9 @@ for command in (
     "echo " + '$(printf ")"; ' * 120 + "true" + ")" * 120,
     "echo " + "$\\uff08" * 120 + "x" + "\\uff09" * 120,
 ):
-    started = time.perf_counter()
+    started = time.thread_time()
     assert detect_dangerous_command(command)[1] == _PARSER_LIMIT_DESCRIPTION, command[:40]
-    assert time.perf_counter() - started < 3.0, command[:40]
+    assert time.thread_time() - started < 3.0, command[:40]
 ''')
 
 
@@ -133,10 +133,10 @@ from tools.approval_detection import (
     _PARSER_LIMIT_DESCRIPTION, _SCAN_INCOMPLETE_DESCRIPTION, detect_dangerous_command, detect_hardline_command)
 for command, verdict, finding in [(c, (False, None), _SCAN_INCOMPLETE_DESCRIPTION) for c in {budget!r}] + [
         (c, (True, _PARSER_LIMIT_DESCRIPTION), _PARSER_LIMIT_DESCRIPTION) for c in {nested!r}]:
-    started = time.perf_counter()
+    started = time.thread_time()
     assert detect_hardline_command(command) == verdict, command[:40]
     assert detect_dangerous_command(command)[1] == finding, command[:40]
-    assert time.perf_counter() - started < 8.0, command[:40]
+    assert time.thread_time() - started < 8.0, command[:40]
 ''')
 
 
@@ -166,9 +166,9 @@ detect_dangerous_command("ls")
 # Harmless on purpose: a dangerous match short-circuits before every rule has scanned the run.
 for run in ("\\n" * 24000, "\\n    " * 24000):
     command = "cat <<EOF > notes.txt" + run + "\\nEOF"
-    started = time.perf_counter()
+    started = time.thread_time()
     assert detect_dangerous_command(command) == (False, None, None)
-    assert time.perf_counter() - started < 10.0
+    assert time.thread_time() - started < 10.0
 ''', timeout=60)
 
 
@@ -226,10 +226,10 @@ def test_ansi_c_quoted_empty_opener_is_scanned_to_its_payload():
     _run_bounded('''
 import time
 from tools.approval_detection import detect_hardline_command
-started = time.perf_counter()
+started = time.thread_time()
 assert detect_hardline_command("echo " + "$''(" * 120 + "rm -rf /" + ")" * 120)[1] == "recursive delete of root filesystem"
 assert detect_hardline_command("echo " + "$''(" * 120 + "reboot")[1] == "system shutdown/reboot"
-assert time.perf_counter() - started < 3.0
+assert time.thread_time() - started < 3.0
 ''')
 
 

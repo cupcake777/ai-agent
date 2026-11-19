@@ -88,9 +88,9 @@ class TestPipeRemoteToShellPattern:
             "curl x | " + "sudo -E env A=1 nice " * 40 + "less",
             "curl x | env " + "-u a=1 " * 24 + "cat",
         ):
-            start = time.perf_counter()
+            start = time.thread_time()
             assert not self._hits(command)
-            assert time.perf_counter() - start < 3, command[:40]
+            assert time.thread_time() - start < 3, command[:40]
 
     def test_many_fetch_pipes_scan_in_linear_time(self):
         # A leading `.*` after curl rescanned the tail from every fetch word (quadratic: ~5s here).
@@ -98,9 +98,9 @@ class TestPipeRemoteToShellPattern:
         # but quadratic blowup still shows as ~16x for 4x the input while linear stays near 4x.
         def scan(n):
             command = "curl | " * n + "x"
-            start = time.perf_counter()
+            start = time.thread_time()
             detect_dangerous_command(command)
-            return time.perf_counter() - start
+            return time.thread_time() - start
 
         def best(n):  # drop load spikes: the least-loaded of three samples
             return min(scan(n) for _ in range(3))
