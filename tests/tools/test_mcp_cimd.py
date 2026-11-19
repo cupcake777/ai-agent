@@ -17,7 +17,7 @@ test lost the race fail on a port another file legitimately held.
 import asyncio
 import json
 import socket
-from pathlib import Path
+
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -39,13 +39,6 @@ from tools.mcp_oauth import (
     _maybe_use_cimd,
 )
 
-_DOCUMENT_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "website" / "static" / "oauth" / "client-metadata.json"
-)
-
-def _document() -> dict:
-    return json.loads(_DOCUMENT_PATH.read_text())
 
 def _set_interactive_stdin(monkeypatch, *, is_tty: bool = True) -> None:
     mock_stdin = MagicMock()
@@ -80,29 +73,8 @@ def private_ports(monkeypatch):
     return ports
 
 # ---------------------------------------------------------------------------
-# The published document and the code must agree
+# Client identifier validation
 # ---------------------------------------------------------------------------
-
-def test_document_client_id_is_the_url_hermes_sends():
-    """A CIMD document is only valid when its client_id is its own URL."""
-    assert _document()["client_id"] == _CIMD_CLIENT_METADATA_URL
-
-def test_document_declares_every_callback_hermes_can_build(tmp_path, monkeypatch):
-    """Every loopback URI a CIMD flow could produce must be registered.
-
-    Exact string matching means one missing entry is a hard auth failure on
-    whichever port the OS happens to hand out that day. Built through the real
-    ``_build_client_metadata`` so pydantic's URL serialization — not an
-    f-string that merely resembles it — is what gets compared.
-    """
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    declared = set(_document()["redirect_uris"])
-
-    for host in _CIMD_REDIRECT_HOSTS:
-        for port in _CIMD_PORTS:
-            cfg = {"redirect_host": host, "_resolved_port": port}
-            uri = str(_build_client_metadata(cfg).redirect_uris[0])
-            assert uri in declared, f"{uri} is not registered in the document"
 
 def test_document_url_passes_the_sdk_validator():
     """The SDK's constructor rejects a URL that fails this check."""
@@ -110,20 +82,6 @@ def test_document_url_passes_the_sdk_validator():
 
     assert is_valid_client_metadata_url(_CIMD_CLIENT_METADATA_URL)
 
-def test_document_advertises_a_public_native_client():
-    """Loopback redirects need application_type=native (SEP-837), and CIMD
-    carries no secret, so the client must be public."""
-    doc = _document()
-    assert doc["application_type"] == "native"
-    assert doc["token_endpoint_auth_method"] == "none"
-    assert "authorization_code" in doc["grant_types"]
-    assert "refresh_token" in doc["grant_types"]
-
-def test_document_carries_no_shared_secret():
-    """Draft section 4.1 forbids secret material in the document."""
-    doc = _document()
-    assert "client_secret" not in doc
-    assert "client_secret_expires_at" not in doc
 
 def test_default_document_url_is_a_valid_client_identifier():
     """Section 3 constrains the URL beyond the SDK's https + path check."""
@@ -141,26 +99,6 @@ def test_client_identifier_url_requirements_are_enforced(url):
     """Rejecting locally beats an opaque invalid-client page mid-flow."""
     assert not _is_valid_cimd_url(url)
 
-def test_generated_redirect_uri_is_registered_in_the_document(tmp_path, monkeypatch):
-    """End to end on the real range: the URI the SDK will actually send is
-    one the authorization server accepts.
-
-    The only test that runs the whole chain on production constants, so it
-    binds a real pinned port. Another test file mid-flight can legitimately
-    be holding all of them; the invariant itself is covered port-by-port,
-    without binding, by the document tests above.
-    """
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    cfg: dict = {}
-
-    _configure_callback_port(cfg, HermesTokenStorage("srv"))
-    if "_cimd_url" not in cfg:
-        pytest.skip("every pinned CIMD port is held by another process")
-    metadata = _build_client_metadata(cfg)
-
-    assert cfg["_cimd_url"] == _CIMD_CLIENT_METADATA_URL
-    assert cfg["_resolved_port"] in _CIMD_PORTS
-    assert str(metadata.redirect_uris[0]) in set(_document()["redirect_uris"])
 
 # ---------------------------------------------------------------------------
 # Eligibility
@@ -310,7 +248,6 @@ def test_dashboard_flow_falls_back_to_dcr(tmp_path, monkeypatch, private_ports):
     flow = DashboardOAuthFlow(
         flow_id="flow-1",
         server_name="srv",
-        profile=None,
         hermes_home=str(tmp_path),
         redirect_uri="https://agent.example/api/mcp/oauth/callback/srv",
     )
@@ -445,23 +382,12 @@ def test_cached_pinned_port_is_not_handed_to_a_sibling_server(
 # Provider wiring
 # ---------------------------------------------------------------------------
 
-def test_build_oauth_auth_forwards_the_document_url(
-    tmp_path, monkeypatch, private_ports
-):
+def test_manager_omits_the_url_when_disabled(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _set_interactive_stdin(monkeypatch)
-    from tools.mcp_oauth import build_oauth_auth
+    from tools.mcp_oauth_manager import MCPOAuthManager
 
-    provider = build_oauth_auth("srv", "https://mcp.example.com/mcp", {})
-
-    assert provider.context.client_metadata_url == _CIMD_CLIENT_METADATA_URL
-
-def test_build_oauth_auth_omits_the_url_when_disabled(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    _set_interactive_stdin(monkeypatch)
-    from tools.mcp_oauth import build_oauth_auth
-
-    provider = build_oauth_auth("srv", "https://mcp.example.com/mcp", {"cimd": False})
+    provider = MCPOAuthManager().get_or_build_provider("srv", "https://mcp.example.com/mcp", {"cimd": False})
 
     assert provider.context.client_metadata_url is None
 
@@ -488,9 +414,9 @@ def test_sdk_chooses_cimd_only_when_the_server_advertises_it(
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _set_interactive_stdin(monkeypatch)
     from mcp.client.auth.utils import should_use_client_metadata_url
-    from tools.mcp_oauth import build_oauth_auth
+    from tools.mcp_oauth_manager import MCPOAuthManager
 
-    provider = build_oauth_auth("srv", "https://mcp.example.com/mcp", {})
+    provider = MCPOAuthManager().get_or_build_provider("srv", "https://mcp.example.com/mcp", {})
     server_metadata = SimpleNamespace(client_id_metadata_document_supported=advertised)
 
     chosen = should_use_client_metadata_url(

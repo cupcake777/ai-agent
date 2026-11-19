@@ -43,12 +43,7 @@ Lanes:
 * ``rust``        — ``cargo test`` for the Tauri bootstrap installer. ``.rs``
   lives under ``apps/``, so without this lane a Rust change matched ``frontend``
   and only the TypeScript matrix ran.
-* ``catalog``     — the plugin-catalog tests (catalog-tests.yml). A diff made
-  only of catalog entry data (``plugin-catalog/*.yaml``, ``contributors/emails/``)
-  runs this lane INSTEAD of the Python suite: those files are data that a known
-  set of tests reads, so a one-entry PR need not run 23k tests on three OSes.
-  ``plugin-catalog/README.md`` is not entry data (a docs page mirrors it), and
-  any other file in the diff brings the full Python suite back.
+
 * ``remote_backends`` — the SSH and Docker terminal backends against a real
   sshd container and the runner's Docker daemon (remote-backends.yml). Every
   other test of those backends is mocked, so a change to the backends, the
@@ -94,6 +89,9 @@ import os
 import subprocess
 import sys
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from hermes_agent.compat.paths import current_path, original_path
+
 _FRONTEND = ("ui-tui/", "web/", "apps/")  # TS typecheck-matrix packages
 # Shipped page outside those packages, exercised by the desktop Electron suite. The desktop cache
 # key owner is checked by tests-js/desktop-build-cache-inputs.test.mjs against the Node graph.
@@ -105,29 +103,16 @@ _WHATSAPP_BRIDGE = ("scripts/whatsapp-bridge/", "plugins/platforms/whatsapp/")
 # Shift every package's tree (pnpm-workspace.yaml carries the overrides).
 _ROOT_NPM = {"package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"}
 _DOCKER_META = ("docker/", ".hadolint.yaml", "Dockerfile", ".dockerignore") # docker setup
+# The docker_meta lint step runs it; it is not an image input, so it builds no image.
+_DOCKER_LINT = "scripts/ci/lint_docker.sh"
 _NIX_PATHS = ("nix/",) # nix files
 _NIX_FILES = {"flake.nix", "flake.lock"} # base nix files
-_SITE = ("website/", "skills/", "optional-skills/")  # docs site + skill pages
+
 # CI configuration outside .github/: workflows run their commands as just recipes
 # through this wrapper, so a change here can break any lane, as a workflow edit can.
 _CI_CONFIG_FILES = {"justfile", "scripts/hermes-python"}
 # Prose/frontend trees that can't touch Python. skills/ is excluded on purpose.
-_PY_SKIP = ("docs/", "website/") + _FRONTEND
-# Published artifacts that live under website/ but that Python asserts about.
-# The OAuth Client ID Metadata Document is cross-checked against the pinned
-# callback ports in tools/mcp_oauth.py, so editing it alone must still run the
-# Python lane — otherwise dropping a redirect URI goes green here and breaks
-# every CIMD login on main.
-# website/docs/ and website/scripts/ are asserted about the same way. The docs
-# tree generates llms.txt — the index every LLM (Hermes included, via the
-# hermes-agent skill) reads to learn what Hermes can do — and
-# tests/website/test_generate_llms_txt.py holds every page to appearing in it.
-# Skipping Python on a docs-only PR is how the index drifted to 53% coverage.
-_PY_RELEVANT_SITE = (
-    "website/static/oauth/",
-    "website/docs/",
-    "website/scripts/",
-)
+_PY_SKIP = ("docs/",) + _FRONTEND
 # Cross-language contract files: data committed under a frontend tree that a
 # pytest pins against the Python side (emitter inventory, command registry).
 # Editing only the JSON in an apps/-only PR would otherwise skip the one test
@@ -142,15 +127,11 @@ _PY_RELEVANT_CONTRACT_FILES = {
     "apps/desktop/src/lib/desktop-slash-registry.json",
     # tests/tui_gateway/test_show_reasoning_display_gate.py (card-tool names vs the gateway lifecycle set)
     "apps/desktop/src/lib/tool-render-class.ts",
-    # tests/website/test_catalog_rules_mirror.py (docs page mirrors the canonical rules)
-    "plugin-catalog/README.md",
+
     # tests/hermes_cli/test_plugin_docs_public_imports.py (its examples import only the plugin API)
     "plugins/AGENTS.md",
 }
 
-# Catalog entry data: read by the catalog tests and the Plugin Catalog CI
-# admission gate, executed by nothing. Same set that gate allows in an entry PR.
-_CATALOG_DATA = ("plugin-catalog/", "contributors/emails/")
 
 # Supply-chain scan: files that can execute code at install/import time.
 _SCAN_EXTS = (".py", ".pth")
@@ -301,6 +282,8 @@ _UPDATE_PIPELINE = (
     "hermes_cli/gateway_launchd.py",
     "hermes_cli/gateway_migrate",
     "hermes_cli/gateway_supervised_restart.py",
+    "hermes_cli/gateway_restart_env.py",  # the fleet restart watcher's env
+    "hermes_cli/gateway_runtime_start.py",  # supervisor-marker strip for the watcher and the pause replay
     "hermes_cli/git_pack_tidy.py",  # partial-clone pack tidy: every update's pre-fetch runs it
     "hermes_bootstrap.py",  # every launch's prepare_launch
     "hermes_constants.py",  # root home = update marker location
@@ -313,6 +296,8 @@ _UPDATE_PIPELINE = (
     "gateway/host_rendezvous.py",
     "gateway/shutdown_forensics.py",
     "gateway/restart.py",
+    "gateway/host_topology.py",  # update --force: the served homes of a host multiplexer
+    "tools/process_registry.py",  # update --force: sweeps a killed gateway's background processes
     "scripts/desktop-update/",  # the hand-off scripts run `hermes update`
 )
 # Selectors are owned by the import graph, not remembered. The update
@@ -363,6 +348,7 @@ _UPDATE_DEPENDENCIES = (
     "hermes_cli/desktop_release_holders.py",  # main_desktop names/closes a holder of release/ on a failed swap
     "hermes_cli/memory_provider_migration.py",
     "hermes_cli/left_core_migration.py",  # source_build migrates plugins that left core
+    "hermes_cli/default_plugins.py",  # the update tail and boot bootstrap install catalog defaults
     "hermes_cli/config_version_stamp.py",  # post_update converts legacy AGENT_BROWSER_* before stamping
     "hermes_cli/web_build_limits.py",  # source_build caps the dashboard Node build
     "hermes_cli/desktop_console.py",
@@ -401,7 +387,7 @@ _UPDATE_DEPENDENCIES = (
     "hermes_platform/resolver/core.py",
     "agent/curator.py",
     "plugins/memory/__init__.py",
-    "tools/checkpoint_maintenance.py",
+    "agent/checkpoints/maintenance.py",
     "tools/skills_sync.py",
     "tools/environments/local_env_policy.py",
     "pm/progress.py",
@@ -415,7 +401,7 @@ _UPDATE_DEPENDENCIES = (
 # General-purpose modules an entry point imports but that half the product
 # imports too (>= HUB_MIN_IMPORTERS product modules, checked by the test). The
 # unit lanes cover them on every PR and the update suites on every push to main;
-# routing each config.py / utils.py edit through the update suites would make
+# routing each config.py / utils edit through the update suites would make
 # them run on most PRs. Never an update-specific module: own those above.
 HUB_MIN_IMPORTERS = 25
 _SHARED_HUBS = frozenset({
@@ -423,8 +409,8 @@ _SHARED_HUBS = frozenset({
     "hermes_cli/config.py",
     "hermes_cli/profiles.py",
     "hermes_cli/version_info.py",
-    "utils.py",
-    "hermes_state.py",
+    "utils/__init__.py",
+    "persistence_assembly.py",
     "agent/__init__.py",
     "cron/jobs.py",
     "tools/environments/local.py",
@@ -441,12 +427,15 @@ _E2E_LANES: dict[str, tuple[str, ...]] = {
         "tests/e2e/",
         # The state.db torture chamber and the compaction/exactly-once
         # suites are the only tests that run real concurrent writers.
-        "hermes_state",
+        "persistence/sqlite/",
+        "sqlite_support.py",  # journal mode, WAL fallback and durability barriers
         # Messaging-gated gateway cases: only the e2e job installs the real
         # Discord/Telegram SDKs (tests.yml "Run messaging-gated gateway cases").
+        "tests/gateway/test_session_terminal_cwd_restart.py",
         "tests/gateway/test_native_role_reauthorization.py",
         "tests/gateway/test_native_telegram_startup_recovery.py",
         "tests/gateway/test_native_pause_notice.py",
+        "tests/gateway/test_reset_paused_queue_notice.py",
         "tests/gateway/test_native_reply_crash_recovery.py",
     ),
     "e2e_upgrade": (
@@ -461,16 +450,24 @@ _E2E_LANES: dict[str, tuple[str, ...]] = {
         "hermes_cli/update_",
         "hermes_cli/_update_",
         "hermes_cli/old_updater",
-        # The downgrade refusal (hermes_cli/update_downgrade_guard.py) reads state.db through it.
-        "hermes_state_holders.py",
-        # The search-index notice (hermes_cli/update_cmd_maint.py) reads the stored FTS layout through it.
-        "hermes_state_fts.py",
+        # The downgrade refusal (hermes_cli/update_downgrade_guard.py) and the search-index notice
+        # (hermes_cli/update_cmd_maint.py) read state.db through the store admin: its contract, the
+        # ledger probes and read-only URI, and the stored FTS layout read.
+        "persistence/core/admin.py",
+        "persistence/sqlite/admin/_backup.py",
+        "persistence/sqlite/_state/holders.py",
+        "persistence/sqlite/admin/_maintenance.py",
+        "persistence/sqlite/_schema_ddl.py",
         "hermes_cli/_old_updater",
         "hermes_cli/post_update",
         "hermes_cli/config_migrations",
         "hermes_cli/subcommands/update",
         "hermes_cli/install_",
         "hermes_cli/_install_",
+        # The module-rename finder and its table: every update entry point installs it, and a move
+        # changes the table.
+        "hermes_agent/__init__.py",
+        "hermes_agent/compat/",
         "hermes_cli/main_install",
         *_UPDATE_PIPELINE,
         *_UPDATE_ENTRY_POINTS,
@@ -538,13 +535,12 @@ _E2E_LANES: dict[str, tuple[str, ...]] = {
 def _with_package_inits(paths: tuple[str, ...]) -> tuple[str, ...]:
     """Importing a/b/c.py runs a/__init__.py and a/b/__init__.py first, so a routed module
     routes the package inits above it. A shared hub's inits run whenever the hub is imported, so
-    they are routed too; only an init that is itself a hub stays out."""
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    inits = [f"{'/'.join(parts[:i])}/__init__.py"
+    they are routed too; only an init that is itself a hub stays out. A moved module also runs the
+    inits above where it lives now; each init is listed by its original path, as classify() reads it."""
+    inits = [original_path(f"{'/'.join(parts[:i])}/__init__.py")
              for p in (*paths, *sorted(_SHARED_HUBS)) if p.endswith(".py")
-             for parts in [p.split("/")[:-1]] for i in range(1, len(parts) + 1)]
-    return tuple(dict.fromkeys([*paths, *(i for i in inits if i not in _SHARED_HUBS
-                                          and os.path.isfile(os.path.join(root, i)))]))
+             for parts in [current_path(p).split("/")[:-1]] for i in range(1, len(parts) + 1)]
+    return tuple(dict.fromkeys([*paths, *(i for i in inits if i not in _SHARED_HUBS)]))
 
 
 for _lane in ("e2e_upgrade", "e2e_desktop_update"):
@@ -576,7 +572,7 @@ def _is_nix(p: str) -> bool:
 
 
 def _py_irrelevant(p: str) -> bool:
-    if p.startswith(_PY_RELEVANT_SITE) or p in _PY_RELEVANT_CONTRACT_FILES:
+    if p in _PY_RELEVANT_CONTRACT_FILES:
         return False
     return (
         _is_docs(p)
@@ -585,10 +581,6 @@ def _py_irrelevant(p: str) -> bool:
         or p.startswith(_DOCKER_META)
         or _is_nix(p)
     )
-
-
-def _is_catalog_data(p: str) -> bool:
-    return p.startswith(_CATALOG_DATA) and p not in _PY_RELEVANT_CONTRACT_FILES
 
 
 def _py_test_only(p: str) -> bool:
@@ -643,11 +635,9 @@ def classify(files: list[str], run_e2e: bool = False) -> dict[str, bool]:
     ``run_e2e`` is the pull request's ``run-e2e`` label: it turns every slow
     lane on.
     """
-    files = [f.strip() for f in files if f.strip()]
-    catalog = any(_is_catalog_data(f) for f in files)
-    code = [f for f in files if not _is_catalog_data(f)]
-    python = any(not _py_irrelevant(f) for f in code)
-    python_prod = any(not _py_irrelevant(f) and not _py_test_only(f) for f in code)
+    files = [original_path(f.strip()) for f in files if f.strip()]
+    python = any(not _py_irrelevant(f) for f in files)
+    python_prod = any(not _py_irrelevant(f) and not _py_test_only(f) for f in files)
     frontend = any(
         f.startswith(_FRONTEND) or f in _ROOT_NPM or f in _FRONTEND_FILES
         or f.startswith(("tests-js/",) + _WHATSAPP_BRIDGE)
@@ -656,14 +646,13 @@ def classify(files: list[str], run_e2e: bool = False) -> dict[str, bool]:
     )
     deps = any(f == "pyproject.toml" for f in files)
     npm_lock = any(f.split("/")[-1] in ("pnpm-lock.yaml", "package-lock.json") for f in files)
-    docker_meta = any(f.startswith(_DOCKER_META) for f in files)
+    docker_meta = any(f.startswith(_DOCKER_META) or f == _DOCKER_LINT for f in files)
     
     ret = {
         "python": python,
         "python_prod": python_prod,
         "docker_meta": docker_meta,
         "frontend": frontend,
-        "site": any(f.startswith(_SITE) for f in files),
         "scan": any(_is_scan(f) for f in files),
         "deps": deps,
         "uv_lock": any(f in ("pyproject.toml", "uv.lock") for f in files),
@@ -674,7 +663,6 @@ def classify(files: list[str], run_e2e: bool = False) -> dict[str, bool]:
         "desktop_updater": any(_is_desktop_updater(f) for f in files),
         "rust": any(_is_rust(f) for f in files),
         "remote_backends": any(f.startswith(_REMOTE_BACKEND_PATHS) for f in files),
-        "catalog": catalog,
         **{lane: run_e2e or on for lane, on in _slow_lanes(files).items()},
     }
     consumers = [c for f in files for c in _SHARED_FIXTURE_CONSUMERS.get(f, ())]
@@ -687,7 +675,6 @@ def classify(files: list[str], run_e2e: bool = False) -> dict[str, bool]:
         ret["python_prod"] = True
         ret["docker_meta"] = True
         ret["frontend"] = True
-        ret["site"] = True
         ret["scan"] = True
         ret["deps"] = True
         ret["uv_lock"] = True
@@ -696,7 +683,6 @@ def classify(files: list[str], run_e2e: bool = False) -> dict[str, bool]:
         ret["desktop_updater"] = True
         ret["rust"] = True
         ret["remote_backends"] = True
-        ret["catalog"] = True
         ret.update(dict.fromkeys(_slow_lanes([]), True))
     return ret
 

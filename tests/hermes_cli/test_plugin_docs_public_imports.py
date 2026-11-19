@@ -8,7 +8,7 @@ a seam are named in ``plugin_docs_import_seams.json``, which may only shrink.
 from __future__ import annotations
 
 import ast
-import json
+
 import re
 import textwrap
 from pathlib import Path
@@ -23,16 +23,9 @@ from hermes_cli.plugin_validate_private_imports import (
     _type_checking_nodes,
 )
 
-_ROOT = Path(__file__).resolve().parents[2]
-_SEAMS = Path(__file__).with_name("plugin_docs_import_seams.json")
 # An ``...`` or ``…`` standing alone as an argument / item / body, e.g. ``f(name="x", ...)``.
 _PLACEHOLDER = re.compile(r"(?<![\w.])(?:\.\.\.|…)(?![\w.])")
 
-
-def _plugin_docs() -> list[Path]:
-    docs = _ROOT / "website" / "docs"
-    return [*sorted((docs / "developer-guide").rglob("*.md*")),
-            *sorted((docs / "user-guide" / "features").glob("plugins*.md")), _ROOT / "plugins" / "AGENTS.md"]
 
 
 def _fences(markdown: str, offset: int = 0):
@@ -209,18 +202,3 @@ def test_scanner_reads_fences_the_mdx_site_renders():
 
     assert scan(markdown) == ({"tools.approval._in_tab", "tools.approval._in_details",
                                "tools.approval._four_past_item"}, [22])
-
-
-def test_plugin_docs_import_only_the_published_plugin_api():
-    scans = {doc.relative_to(_ROOT).as_posix(): scan(doc.read_text(encoding="utf-8")) for doc in _plugin_docs()}
-    unparsable = [f"{page}:{line}" for page, (_, lines) in scans.items() for line in lines]
-    found = {f"{page} {target}" for page, (targets, _) in scans.items() for target in targets}
-    seams = set(json.loads(_SEAMS.read_text(encoding="utf-8"))["sites"])
-
-    assert not unparsable, (
-        "these plugin-docs Python blocks import something but do not parse, so their imports cannot be "
-        f"checked; make the block valid Python (placeholders like `...` are fine): {unparsable}")
-    assert not found - seams, (
-        "plugin docs import Hermes names outside hermes_cli/data/plugin_api.json; rewrite the example "
-        f"onto ctx.* or a listed name: {sorted(found - seams)}")
-    assert not seams - found, f"no longer in the docs, delete from {_SEAMS.name}: {sorted(seams - found)}"

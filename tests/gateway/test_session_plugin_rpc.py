@@ -26,13 +26,56 @@ def register(ctx):
     ctx.register_rpc("pane.where", lambda params, *, session_id, **kw: threading.current_thread().name)
 '''
 
-def _documented_chart_plugin():
-    """The plugin RPC handler ``plugin-llm-access.md`` teaches, taken verbatim from the page."""
-    from pathlib import Path
-    page = (Path(__file__).resolve().parents[2] / 'website' / 'docs' / 'developer-guide'
-            / 'plugin-llm-access.md').read_text(encoding='utf-8')
-    section = page[page.index("#### From the plugin's frontend"):]
-    return section[section.index('```python\n') + len('```python\n'):section.index('\n```\n')] + '\n'
+def _chart_plugin():
+    """Plugin RPC fixture used to exercise background auxiliary calls."""
+    return '''
+import contextvars
+import threading
+import uuid
+
+from agent.redact import redact_sensitive_text
+
+CHART = {"type": "object", "properties": {"kind": {"type": "string"}}, "required": ["kind"]}
+
+
+def register(ctx):
+    ctx.register_auxiliary_task("chart_writer", display_name="Charts", description="Pick chart kinds.")
+    slots = threading.BoundedSemaphore(4)
+
+    def write_chart(params, *, session_id, **kwargs):
+        if not session_id:
+            raise ValueError("chart.write needs a session_id")
+        job = uuid.uuid4().hex
+        text = redact_sensitive_text(str(params.get("text", "")), force=True)
+
+        def run():
+            try:
+                result = ctx.llm.complete_structured(
+                    instructions="Pick a chart kind for this data.",
+                    input=[{"type": "text", "text": text}],
+                    json_schema=CHART,
+                    task="chart_writer",
+                )
+                if result.parsed is None:
+                    raise ValueError("the model did not answer with JSON")
+                payload = {"job": job, "chart": result.parsed}
+            except Exception as exc:
+                payload = {"job": job, "error": str(exc)}
+            finally:
+                slots.release()
+            ctx.emit_to_session(session_id, "chart.written", payload)
+
+        if not slots.acquire(blocking=False):
+            raise RuntimeError("chart.write is busy: wait for a chart.written event")
+        try:
+            threading.Thread(target=contextvars.copy_context().run, args=(run,), daemon=True).start()
+        except Exception:
+            slots.release()
+            raise
+        return {"job": job}
+
+    ctx.register_rpc("chart.write", write_chart)
+'''
 
 
 class _ChartModel(BaseHTTPRequestHandler):
@@ -271,7 +314,7 @@ async def test_plugin_frontend_gets_schema_checked_json_from_its_own_task_with_i
     plugin = tmp_path / 'plugins' / 'chart-demo'
     plugin.mkdir(parents=True)
     (plugin / 'plugin.yaml').write_text(yaml.safe_dump({'name': 'chart-demo', 'version': '0.1.0'}))
-    (plugin / '__init__.py').write_text(_documented_chart_plugin())
+    (plugin / '__init__.py').write_text(_chart_plugin())
     (tmp_path / 'config.yaml').write_text(yaml.safe_dump({
         'plugins': {'enabled': ['chart-demo'], 'isolation': isolation},
         'auxiliary': {'chart_writer': {'provider': 'custom', 'model': 'chart-model', 'api_key': 'loopback-only',

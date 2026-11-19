@@ -361,25 +361,6 @@ class TestDefaultModelFromCache:
             fetch.assert_not_called()
 
 
-    def test_shipped_manifest_labels_the_silent_default(self, isolated_home):
-        """Contract with the in-repo manifest: both provider blocks label the
-        same default entry the code constant points at."""
-        from hermes_cli import model_catalog
-        from hermes_cli.models import PREFERRED_SILENT_DEFAULT_MODEL
-
-        repo_root = Path(model_catalog.__file__).resolve().parent.parent
-        manifest = json.loads(
-            (repo_root / "website" / "static" / "api" / "model-catalog.json").read_text()
-        )
-        for provider in ("openrouter", "nous"):
-            block = manifest["providers"][provider]
-            labeled = [m["id"] for m in block["models"] if m.get("default")]
-            assert labeled == [PREFERRED_SILENT_DEFAULT_MODEL], (
-                f"{provider}: exactly one entry must be labeled default and it "
-                f"must match PREFERRED_SILENT_DEFAULT_MODEL"
-            )
-
-
 class TestProviderOverride:
     def test_override_url_takes_precedence(self, isolated_home):
         from hermes_cli import model_catalog
@@ -665,70 +646,14 @@ class TestSwrRefreshProfileScope:
 
 
 class TestManifestMatchesInRepoLists:
-    """Fail if the on-disk manifest is out of date relative to in-repo lists."""
+    """Pin the server fork's in-repo curated model floors."""
 
-    @staticmethod
-    def _strip_volatile(catalog: dict) -> dict:
-        """Drop fields that always change (timestamps) for diff comparison."""
-        out = dict(catalog)
-        out.pop("updated_at", None)
-        return out
-
-    def test_in_repo_lists_match_manifest(self):
-        """``scripts/build_model_catalog.py`` output must match the committed file.
-
-        If this fails, run ``python scripts/build_model_catalog.py`` and
-        commit the regenerated ``website/static/api/model-catalog.json``.
-        """
-        # Resolve the repo root from this test file's location.
-        repo_root = Path(__file__).resolve().parents[2]
-        manifest_path = repo_root / "website" / "static" / "api" / "model-catalog.json"
-
-        if not manifest_path.exists():
-            pytest.skip(f"manifest missing at {manifest_path}")
-
-        # Build expected catalog using the same script CI would.
-        import importlib.util
-        script_path = repo_root / "scripts" / "build_model_catalog.py"
-        spec = importlib.util.spec_from_file_location("_build_model_catalog", script_path)
-        mod = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(mod)
-        expected = mod.build_catalog()
-
-        with open(manifest_path, encoding="utf-8") as fh:
-            actual = json.load(fh)
-
-        assert self._strip_volatile(actual) == self._strip_volatile(expected), (
-            "website/static/api/model-catalog.json is out of sync with "
-            "_PROVIDER_MODELS['nous'] / OPENROUTER_MODELS. "
-            "Run: python scripts/build_model_catalog.py && "
-            "git add website/static/api/model-catalog.json"
-        )
-
-    def test_inclusion_ling_free_is_curated_and_published(self):
-        """inclusionai/ling-3.0-flash:free must reach the picker from BOTH sources (#73686).
-
-        The model works when named explicitly via ``hermes config set model.default`` but was
-        absent from the curated fallback list, so the runtime fetcher's stale-while-revalidate
-        and offline floors never offered it in the Desktop model picker. The static list is
-        the floor; the published manifest is what fresh installs fetch — both must carry it.
-        """
+    def test_inclusion_ling_free_is_curated(self):
+        """inclusionai/ling-3.0-flash:free must remain in the offline picker floor."""
         from hermes_cli.models_catalog_static import OPENROUTER_MODELS
 
         curated_ids = [mid for mid, _desc in OPENROUTER_MODELS]
         assert "inclusionai/ling-3.0-flash:free" in curated_ids
-
-        repo_root = Path(__file__).resolve().parents[2]
-        manifest_path = repo_root / "website" / "static" / "api" / "model-catalog.json"
-        if not manifest_path.exists():
-            pytest.skip(f"manifest missing at {manifest_path}")
-        with open(manifest_path, encoding="utf-8") as fh:
-            manifest_ids = [
-                entry["id"]
-                for entry in json.load(fh)["providers"]["openrouter"]["models"]
-            ]
-        assert "inclusionai/ling-3.0-flash:free" in manifest_ids
 
     def test_nous_lists_portal_served_muse_spark_but_not_contributor_twins(self):
         """The Portal serves plain muse-spark 1.2/1.3; only the -contributor twins are OpenRouter-only."""

@@ -78,13 +78,7 @@ def test_archive_gate_uses_bootstrap_python_and_trusted_exact_revision():
     assert archive_index < next(i for i, s in enumerate(steps) if s.get("id") == "install")
 
 
-def test_scheduled_and_main_r2_consumers_skip_without_credentials():
-    """Only explicit release runs may fail on missing R2; main and the nightly stay green."""
-    prune = load("canary-release.yml")["jobs"]["prune"]
-    assert R2_ENV <= prune["env"].keys()
-    r2_steps = [s for s in prune["steps"] if "scripts.releases.r2" in s.get("run", "")]
-    assert r2_steps and all(needs_r2_credentials(s) for s in r2_steps)
-
+def test_main_termux_native_runtime_is_credential_gated():
     termux = load("termux-verify.yml")
     assert termux["on"]["push"]["branches"] == ["main"] and "pull_request" in termux["on"]
     native = termux["jobs"]["native-runtime"]

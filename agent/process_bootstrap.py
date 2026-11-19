@@ -304,11 +304,11 @@ def build_keepalive_http_client(base_url: str = "", *, async_mode: bool = False,
         transport_cls = httpx.AsyncHTTPTransport if async_mode else httpx.HTTPTransport
         client_cls = httpx.AsyncClient if async_mode else httpx.Client
         mounts = None
-        # Official Codex backend only: zstd request bodies when the stdlib codec exists (None otherwise).
-        from agent.codex_headers import codex_request_compression_hooks
+        from agent.codex_headers import codex_request_compression_hooks, codex_zstd_replay_client_cls
         hooks = codex_request_compression_hooks(base_url, async_mode=async_mode)
         if hooks:
             request_hooks += hooks["request"]
+            client_cls = codex_zstd_replay_client_cls(async_mode)
         event_hooks = {"request": request_hooks}
         if proxy is None:
             happy_eyeballs = not async_mode and _uses_codex_cloud_transport(base_url)
